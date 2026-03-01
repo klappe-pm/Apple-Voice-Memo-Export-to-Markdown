@@ -4,12 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
 
-# Known Voice Memos locations on macOS
+# Known Voice Memos locations on macOS (checked in order)
 VOICE_MEMOS_PATHS = [
-    # macOS 15+ / iOS 18+ synced (primary)
+    # macOS Sonoma+ with iCloud (most common current path)
     Path("~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"),
-    # Legacy location
+    # macOS Sonoma+ Containers path
+    Path("~/Library/Containers/com.apple.VoiceMemos/Data/Library/Application Support/Recordings"),
+    # macOS Ventura and earlier / iCloud disabled
     Path("~/Library/Application Support/com.apple.voicememos/Recordings"),
+    # Alternative Application Support path
+    Path("~/Library/Application Support/com.apple.VoiceMemos/Recordings"),
 ]
 
 
@@ -74,6 +78,23 @@ def discover_memos(source_path: Path) -> Iterator[MemoPair]:
             composition_path=composition_path if composition_path.exists() else None,
             memo_id=memo_id,
         )
+
+
+def diagnose_paths() -> list[tuple[Path, bool, int]]:
+    """Check all known Voice Memos paths and report status.
+
+    Returns:
+        List of (path, exists, memo_count) tuples.
+    """
+    results = []
+    for path in VOICE_MEMOS_PATHS:
+        expanded = path.expanduser()
+        exists = expanded.exists()
+        memo_count = 0
+        if exists:
+            memo_count = len(list(expanded.glob("*.m4a")))
+        results.append((expanded, exists, memo_count))
+    return results
 
 
 def check_file_stability(path: Path, check_count: int = 3, interval: float = 2.0) -> bool:

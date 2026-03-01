@@ -12,7 +12,7 @@ from rich.table import Table
 
 from vmea import __version__
 from vmea.config import VMEAConfig, get_config_path, load_config
-from vmea.discovery import discover_memos, find_source_path
+from vmea.discovery import diagnose_paths, discover_memos, find_source_path
 from vmea.parser import parse_memo
 from vmea.state import StateStore, compute_source_hash, record_export, should_export
 from vmea.writer import format_duration, write_note
@@ -329,10 +329,15 @@ def doctor() -> None:
         console.print(f"  Found {memo_count} memo(s)")
     else:
         console.print("[red]✗[/red] Voice Memos folder not found")
-        console.print("  Checked:")
-        console.print("    ~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/")
-        console.print("    ~/Library/Application Support/com.apple.voicememos/Recordings/")
-        console.print("  [dim]Ensure Full Disk Access is granted in System Settings > Privacy & Security[/dim]")
+        console.print("  [bold]Paths checked:[/bold]")
+        for path, exists, count in diagnose_paths():
+            status = f"[green]exists[/green] ({count} memos)" if exists else "[dim]not found[/dim]"
+            console.print(f"    {path}")
+            console.print(f"      {status}")
+        console.print("\n  [bold yellow]To fix:[/bold yellow]")
+        console.print("  1. Open the Voice Memos app on your Mac to trigger iCloud sync")
+        console.print("  2. Wait for sync to complete (check Voice Memos app for recordings)")
+        console.print("  3. Grant Full Disk Access in System Settings > Privacy & Security")
         issues += 1
 
     # Check output folder
