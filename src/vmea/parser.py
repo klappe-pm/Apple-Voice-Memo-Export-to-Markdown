@@ -1,10 +1,13 @@
 """VMEA Parser – Extract metadata and transcripts from Voice Memos."""
 
 import plistlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from mutagen.mp4 import MP4
 
 
 @dataclass
@@ -74,6 +77,66 @@ def extract_tsrp_atom(audio_path: Path) -> Optional[str]:
     return None
 
 
+# Regex pattern for Voice Memo filename: "YYYYMMDD HHMMSS-UUID"
+_FILENAME_DATE_PATTERN = re.compile(
+    r"^(\d{4})(\d{2})(\d{2})\s+(\d{2})(\d{2})(\d{2})-[A-F0-9]+$",
+    re.IGNORECASE,
+)
+
+
+def parse_date_from_filename(memo_id: str) -> Optional[datetime]:
+    """Parse recording date from Voice Memo filename.
+
+    Voice Memos use format: "YYYYMMDD HHMMSS-UUID"
+    Example: "20250809 202743-D74EE5C0" -> Aug 9, 2025 at 8:27:43 PM
+
+    Args:
+        memo_id: The memo identifier (filename stem).
+
+    Returns:
+        Parsed datetime, or None if format doesn't match.
+    """
+    match = _FILENAME_DATE_PATTERN.match(memo_id)
+    if not match:
+        return None
+
+    try:
+        year, month, day, hour, minute, second = map(int, match.groups())
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+
+
+def extract_duration_from_m4a(audio_path: Path) -> Optional[float]:
+    """Extract duration from M4A file using mutagen.
+
+    Args:
+        audio_path: Path to .m4a file.
+
+    Returns:
+        Duration in seconds, or None if extraction fails.
+    """
+    try:
+        audio = MP4(audio_path)
+        if audio.info and audio.info.length:
+            return audio.info.length
+    except Exception:
+        pass
+    return None
+
+
+def generate_title_from_date(dt: datetime) -> str:
+    """Generate a human-readable title from a datetime.
+
+    Args:
+        dt: Recording datetime.
+
+    Returns:
+        Formatted title like "Voice Memo - Aug 9, 2025 8:27 PM"
+    """
+    return dt.strftime("Voice Memo - %b %-d, %Y %-I:%M %p")
+
+
 def parse_memo(
     audio_path: Path,
     composition_path: Optional[Path],
@@ -128,7 +191,12 @@ def parse_memo(
     metadata.transcript = transcript
     metadata.transcript_source = source
 
-    # Fallback: get dates from file system
+    # Fallback 1: Parse date from filename (most reliable for synced files)
+    # Filename format: "YYYYMMDD HHMMSS-UUID" contains original recording time
+    if not metadata.created:
+        metadata.created = parse_date_from_filename(memo_id)
+
+    # Fallback 2: Get dates from file system (least reliable for synced files)
     if not metadata.created:
         try:
             stat = audio_path.stat()
@@ -142,5 +210,13 @@ def parse_memo(
             metadata.modified = datetime.fromtimestamp(stat.st_mtime)
         except OSError:
             pass
+
+    # Fallback: Extract duration from M4A file if not in plist
+    if metadata.duration_seconds is None:
+        metadata.duration_seconds = extract_duration_from_m4a(audio_path)
+
+    # Fallback: Generate title from recording date if no plist title
+    if not metadata.title and metadata.created:
+        metadata.title = generate_title_from_date(metadata.created)
 
     return metadata
