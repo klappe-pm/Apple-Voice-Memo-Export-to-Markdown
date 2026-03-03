@@ -14,7 +14,9 @@ from rich.table import Table
 
 from vmea import __version__
 from vmea.cleanup import (
+    CascadeCleanupResult,
     CleanupResult,
+    cascade_cleanup_transcript,
     cleanup_transcript,
     generate_domains,
     generate_filename_title,
@@ -61,6 +63,9 @@ def render_config_content(config: VMEAConfig) -> str:
     ollama_host = quote_toml_string(config.ollama_host)
     ollama_model = quote_toml_string(config.ollama_model)
 
+    # Format ollama_models as TOML array
+    ollama_models_str = "[" + ", ".join(f'"{quote_toml_string(m)}"' for m in config.ollama_models) + "]" if config.ollama_models else "[]"
+
     return f'''# VMEA Configuration
 # Generated on {datetime.now().isoformat()}
 
@@ -81,6 +86,7 @@ transcript_source_priority = "{config.transcript_source_priority.value if hasatt
 # LLM cleanup
 llm_cleanup_enabled = {str(config.llm_cleanup_enabled).lower()}
 ollama_model = "{ollama_model}"
+ollama_models = {ollama_models_str}  # Cascade: [transcribe, revise, polish]
 ollama_host = "{ollama_host}"
 ollama_timeout = {config.ollama_timeout}
 cleanup_instructions_path = "{cleanup_path}"
@@ -189,6 +195,36 @@ def prompt_ollama_model(saved_model: str, host: str, allow_skip: bool = False) -
     Returns:
         Selected model name, or None if the user chose to skip.
     """
+    return prompt_ollama_models(
+        saved_models=[saved_model] if saved_model else [],
+        host=host,
+        allow_skip=allow_skip,
+        max_models=1,
+    )[0] if (result := prompt_ollama_models(
+        saved_models=[saved_model] if saved_model else [],
+        host=host,
+        allow_skip=allow_skip,
+        max_models=1,
+    )) else None
+
+
+def prompt_ollama_models(
+    saved_models: list[str],
+    host: str,
+    allow_skip: bool = False,
+    max_models: int = 3,
+) -> list[str]:
+    """Show a numbered list of local Ollama models for cascade selection.
+
+    Args:
+        saved_models: Previously configured model names (highlighted in list).
+        host: Ollama server URL.
+        allow_skip: If True, show a "Skip LLM" option (returns empty list).
+        max_models: Maximum number of models to select (1-3).
+
+    Returns:
+        List of selected model names, or empty list if skipped.
+    """
     # Try API first, fall back to CLI
     models, error_message = list_models(host)
     if error_message:
@@ -200,35 +236,99 @@ def prompt_ollama_model(saved_model: str, host: str, allow_skip: bool = False) -
         else:
             console.print("[yellow]No Ollama models installed.[/yellow]")
         if allow_skip:
-            return None
-        return typer.prompt("Enter Ollama model name", default=saved_model).strip()
+            return []
+        # Fall back to manual entry
+        default = saved_models[0] if saved_models else "llama3.2:3b"
+        model = typer.prompt("Enter Ollama model name", default=default).strip()
+        return [model] if model else []
 
     console.print("\n[bold]Available Ollama models:[/bold]")
     if allow_skip:
         console.print("  0. [dim]Skip LLM processing[/dim]")
     for i, model in enumerate(models, 1):
-        marker = " [green](current)[/green]" if model == saved_model else ""
+        marker = ""
+        if model in saved_models:
+            idx = saved_models.index(model) + 1
+            marker = f" [green](stage {idx})[/green]"
         console.print(f"  {i}. {model}{marker}")
 
-    # Determine default selection number
-    default_num = "1"
-    if saved_model in models:
-        default_num = str(models.index(saved_model) + 1)
+    if max_models > 1:
+        console.print(f"\n[dim]Select up to {max_models} models for cascade processing.")
+        console.print("Enter numbers separated by commas (e.g., '1,2,3') or 'done' to finish.[/dim]")
+
+    # For single model selection, use simple prompt
+    if max_models == 1:
+        default_num = "1"
+        if saved_models and saved_models[0] in models:
+            default_num = str(models.index(saved_models[0]) + 1)
+
+        while True:
+            choice = typer.prompt("\nSelect model", default=default_num).strip()
+            try:
+                idx = int(choice)
+                if allow_skip and idx == 0:
+                    return []
+                if 1 <= idx <= len(models):
+                    return [models[idx - 1]]
+                console.print(f"[red]Enter a number between {0 if allow_skip else 1} and {len(models)}[/red]")
+            except ValueError:
+                if choice in models:
+                    return [choice]
+                console.print("[red]Invalid selection. Enter a number or model name.[/red]")
+
+    # Multi-model cascade selection
+    selected: list[str] = []
+    default_selection = ",".join(
+        str(models.index(m) + 1) for m in saved_models if m in models
+    ) or "1"
 
     while True:
-        choice = typer.prompt("\nSelect model", default=default_num).strip()
+        prompt_text = f"\nSelect models (1-{max_models})"
+        if selected:
+            prompt_text = f"\nSelected: {', '.join(selected)}. Add more or 'done'"
+
+        choice = typer.prompt(prompt_text, default=default_selection if not selected else "done").strip().lower()
+
+        if choice == "done" or choice == "":
+            if selected:
+                return selected
+            if allow_skip:
+                return []
+            console.print("[red]Please select at least one model.[/red]")
+            continue
+
+        if allow_skip and choice == "0":
+            return []
+
+        # Parse comma-separated numbers
         try:
-            idx = int(choice)
-            if allow_skip and idx == 0:
-                return None
-            if 1 <= idx <= len(models):
-                return models[idx - 1]
-            console.print(f"[red]Enter a number between {0 if allow_skip else 1} and {len(models)}[/red]")
+            indices = [int(x.strip()) for x in choice.split(",")]
+            new_models = []
+            for idx in indices:
+                if 1 <= idx <= len(models):
+                    model = models[idx - 1]
+                    if model not in selected and model not in new_models:
+                        new_models.append(model)
+                else:
+                    console.print(f"[yellow]Skipping invalid index: {idx}[/yellow]")
+
+            selected.extend(new_models)
+            if len(selected) >= max_models:
+                return selected[:max_models]
+
+            if new_models:
+                console.print(f"[green]Added: {', '.join(new_models)}[/green]")
+                if len(selected) < max_models:
+                    console.print(f"[dim]({max_models - len(selected)} more slots available)[/dim]")
         except ValueError:
-            # Allow typing model name directly
-            if choice in models:
-                return choice
-            console.print("[red]Invalid selection. Enter a number or model name.[/red]")
+            # Try as model name
+            if choice in models and choice not in selected:
+                selected.append(choice)
+                console.print(f"[green]Added: {choice}[/green]")
+                if len(selected) >= max_models:
+                    return selected
+            else:
+                console.print("[red]Invalid selection. Enter numbers separated by commas.[/red]")
 
 
 def version_callback(value: bool) -> None:
@@ -302,10 +402,34 @@ def init() -> None:
         default=existing_config.llm_cleanup_enabled if existing_config else True,
     )
     ollama_model = existing_config.ollama_model if existing_config else "llama3.2:3b"
+    ollama_models: list[str] = existing_config.ollama_models if existing_config else []
     ollama_host = existing_config.ollama_host if existing_config else "http://localhost:11434"
     if llm_cleanup_enabled:
         ollama_host = typer.prompt("Ollama host", default=ollama_host).strip()
-        ollama_model = prompt_ollama_model(ollama_model, ollama_host)
+
+        # Ask about cascade mode
+        use_cascade = typer.confirm(
+            "Configure cascade mode (multiple models for progressive refinement)?",
+            default=len(ollama_models) > 1,
+        )
+        if use_cascade:
+            saved_models = ollama_models if ollama_models else [ollama_model]
+            ollama_models = prompt_ollama_models(
+                saved_models=saved_models,
+                host=ollama_host,
+                allow_skip=False,
+                max_models=3,
+            )
+            ollama_model = ollama_models[0] if ollama_models else ollama_model
+        else:
+            picked = prompt_ollama_models(
+                saved_models=[ollama_model],
+                host=ollama_host,
+                allow_skip=False,
+                max_models=1,
+            )
+            ollama_model = picked[0] if picked else ollama_model
+            ollama_models = []  # Clear cascade config
 
     # Create config
     config = VMEAConfig(
@@ -316,6 +440,7 @@ def init() -> None:
         source_path_override=source_override,
         llm_cleanup_enabled=llm_cleanup_enabled,
         ollama_model=ollama_model,
+        ollama_models=ollama_models,
         ollama_host=ollama_host,
         preserve_raw_transcript=True,
     )
@@ -332,7 +457,10 @@ def init() -> None:
     if source_override:
         console.print(f"[green]✓[/green] Source folder: {source_override}")
     if llm_cleanup_enabled:
-        console.print(f"[green]✓[/green] Ollama model: {ollama_model}")
+        if ollama_models and len(ollama_models) > 1:
+            console.print(f"[green]✓[/green] Cascade mode: {' → '.join(ollama_models)}")
+        else:
+            console.print(f"[green]✓[/green] Ollama model: {ollama_model}")
     console.print("\n[bold]Next steps:[/bold]")
     console.print("  vmea list     – List discovered voice memos")
     console.print("  vmea export   – Export all memos")
@@ -391,7 +519,11 @@ def export(
 
     # Prepare Ollama – start server, show model picker, preload
     llm_enabled = config.llm_cleanup_enabled
-    selected_model = config.ollama_model
+    # Use cascade models if configured, else fall back to single model
+    saved_models = config.ollama_models if config.ollama_models else [config.ollama_model]
+    selected_models: list[str] = []
+    use_cascade = False
+
     if llm_enabled:
         console.print("[dim]Starting Ollama...[/dim]")
         terminal_mode = config.ollama_startup_mode == "terminal_managed"
@@ -411,26 +543,50 @@ def export(
         if llm_enabled:
             console.print("[green]✓[/green] Ollama is running")
 
-            # Interactive model selection
-            picked = prompt_ollama_model(
-                saved_model=config.ollama_model,
-                host=config.ollama_host,
-                allow_skip=True,
-            )
-            if picked is None:
-                console.print("[dim]Skipping LLM processing.[/dim]")
-                llm_enabled = False
-            else:
-                selected_model = picked
-                console.print(f"[dim]Preloading {selected_model}...[/dim]")
-                success, err = preload_model(selected_model, config.ollama_host)
-                if not success:
-                    console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
-                    if not typer.confirm("Continue without LLM cleanup?", default=False):
-                        raise typer.Exit(1)
+            # Ask if user wants cascade mode
+            if typer.confirm("Use cascade mode (multiple models for progressive refinement)?", default=len(saved_models) > 1):
+                picked = prompt_ollama_models(
+                    saved_models=saved_models,
+                    host=config.ollama_host,
+                    allow_skip=True,
+                    max_models=3,
+                )
+                if not picked:
+                    console.print("[dim]Skipping LLM processing.[/dim]")
                     llm_enabled = False
                 else:
-                    console.print(f"[green]✓[/green] Ready with model: {selected_model}")
+                    selected_models = picked
+                    use_cascade = len(selected_models) > 1
+                    console.print(f"[dim]Preloading {selected_models[0]}...[/dim]")
+                    success, err = preload_model(selected_models[0], config.ollama_host)
+                    if not success:
+                        console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
+                    if use_cascade:
+                        console.print(f"[green]✓[/green] Cascade mode: {' → '.join(selected_models)}")
+                    else:
+                        console.print(f"[green]✓[/green] Ready with model: {selected_models[0]}")
+            else:
+                # Single model selection
+                picked = prompt_ollama_models(
+                    saved_models=saved_models[:1],
+                    host=config.ollama_host,
+                    allow_skip=True,
+                    max_models=1,
+                )
+                if not picked:
+                    console.print("[dim]Skipping LLM processing.[/dim]")
+                    llm_enabled = False
+                else:
+                    selected_models = picked
+                    console.print(f"[dim]Preloading {selected_models[0]}...[/dim]")
+                    success, err = preload_model(selected_models[0], config.ollama_host)
+                    if not success:
+                        console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
+                        if not typer.confirm("Continue without LLM cleanup?", default=False):
+                            raise typer.Exit(1)
+                        llm_enabled = False
+                    else:
+                        console.print(f"[green]✓[/green] Ready with model: {selected_models[0]}")
 
     # Process each memo
     stats = {"created": 0, "skipped": 0, "failed": 0}
@@ -493,42 +649,57 @@ def export(
             domains = ""
             sub_domains = ""
             llm_title = ""
-            if metadata.transcript and llm_enabled:
+            if metadata.transcript and llm_enabled and selected_models:
                 try:
-                    llm_model = selected_model
+                    # Use first model for auxiliary tasks, cascade for main cleanup
+                    primary_model = selected_models[0]
+                    llm_model = " → ".join(selected_models) if use_cascade else primary_model
 
                     # Generate filename title first (needed for write_note)
                     llm_title = generate_filename_title(
                         transcript=metadata.transcript,
-                        model=selected_model,
+                        model=primary_model,
                         host=config.ollama_host,
                         timeout=config.ollama_timeout,
                     )
 
-                    # Clean up transcript
-                    cleanup_result = cleanup_transcript(
-                        transcript=metadata.transcript,
-                        model=selected_model,
-                        host=config.ollama_host,
-                        timeout=config.ollama_timeout,
-                        instructions_path=config.cleanup_instructions_path,
-                        search_dir=output_folder,
-                        fail_on_missing_instruction=config.fail_on_missing_instruction_file,
-                    )
-                    metadata.revised_transcript = cleanup_result.revised_transcript
+                    # Clean up transcript (cascade or single model)
+                    if use_cascade:
+                        console.print(f"  [dim]cascade cleanup[/dim] {memo_pair.memo_id[:12]}...")
+                        cascade_result = cascade_cleanup_transcript(
+                            transcript=metadata.transcript,
+                            models=selected_models,
+                            host=config.ollama_host,
+                            timeout=config.ollama_timeout,
+                            instructions_path=config.cleanup_instructions_path,
+                            search_dir=output_folder,
+                            fail_on_missing_instruction=config.fail_on_missing_instruction_file,
+                        )
+                        metadata.revised_transcript = cascade_result.revised_transcript
+                    else:
+                        cleanup_result = cleanup_transcript(
+                            transcript=metadata.transcript,
+                            model=primary_model,
+                            host=config.ollama_host,
+                            timeout=config.ollama_timeout,
+                            instructions_path=config.cleanup_instructions_path,
+                            search_dir=output_folder,
+                            fail_on_missing_instruction=config.fail_on_missing_instruction_file,
+                        )
+                        metadata.revised_transcript = cleanup_result.revised_transcript
 
-                    # Generate key takeaways
+                    # Generate key takeaways (using primary model)
                     key_takeaways = generate_key_takeaways(
                         transcript=metadata.transcript,
-                        model=selected_model,
+                        model=primary_model,
                         host=config.ollama_host,
                         timeout=config.ollama_timeout,
                     )
 
-                    # Generate domain categorization
+                    # Generate domain categorization (using primary model)
                     domain_result = generate_domains(
                         transcript=metadata.transcript,
-                        model=selected_model,
+                        model=primary_model,
                         host=config.ollama_host,
                         timeout=config.ollama_timeout,
                     )

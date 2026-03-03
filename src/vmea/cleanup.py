@@ -11,30 +11,22 @@ from urllib import error, request
 from vmea.ollama import is_ollama_running
 
 
-DEFAULT_CLEANUP_INSTRUCTIONS = """You are a transcript editor. Your task is to clean up and improve a raw voice memo transcript.
-
-You MUST make improvements to the transcript. Do not simply return the original text unchanged.
-
-Your edits should:
-1. Fix punctuation errors and add proper sentence endings
-2. Fix capitalization (beginning of sentences, proper nouns)
-3. Add paragraph breaks where topics change or natural pauses occur
-4. Correct obvious speech-to-text errors (e.g., "there" vs "their", "your" vs "you're")
-5. Remove filler words like "um", "uh", "like", "you know" when excessive
-6. Fix run-on sentences by adding appropriate punctuation
-
-You must NOT:
-- Summarize or shorten the content
-- Remove meaningful content
-- Add information that wasn't spoken
-- Change the speaker's meaning or intent
-- Change first-person to third-person
-
-Return ONLY the cleaned transcript text. No explanations, no preamble, no markdown formatting.
-"""
+# Path to bundled default instructions file
+_DEFAULT_INSTRUCTIONS_PATH = Path(__file__).parent / "prompts" / "cleanup_instructions.md"
 
 # Instruction file fallback order (after explicit path)
-INSTRUCTION_FILE_FALLBACKS = ["CLAUDE.md", "GEMINI.md", "README.md"]
+INSTRUCTION_FILE_FALLBACKS = ["cleanup_instructions.md", "CLAUDE.md", "GEMINI.md", "README.md"]
+
+
+def _load_default_instructions() -> str:
+    """Load default cleanup instructions from bundled file."""
+    if _DEFAULT_INSTRUCTIONS_PATH.exists():
+        return _DEFAULT_INSTRUCTIONS_PATH.read_text(encoding="utf-8").strip()
+    # Fallback if file is missing (shouldn't happen in installed package)
+    return """You are a transcript editor. Your task is to clean up and improve a raw voice memo transcript.
+You MUST make improvements to the transcript. Do not return the original text unchanged.
+Fix punctuation, grammar, and formatting. Remove filler words. Add paragraph breaks.
+Return ONLY the cleaned transcript text."""
 
 
 @dataclass
@@ -97,7 +89,7 @@ def resolve_instruction_file(
             f"{', '.join(INSTRUCTION_FILE_FALLBACKS)} in {search_dir}"
         )
 
-    return DEFAULT_CLEANUP_INSTRUCTIONS, "default"
+    return _load_default_instructions(), str(_DEFAULT_INSTRUCTIONS_PATH)
 
 
 def _call_ollama(
@@ -164,6 +156,103 @@ def cleanup_transcript(
         revised_transcript=revised,
         instruction_source=instruction_source,
         model=model,
+    )
+
+
+@dataclass
+class CascadeCleanupResult:
+    """Result of cascading transcript cleanup across multiple models."""
+
+    revised_transcript: str
+    instruction_source: str
+    models: list[str]  # Models used in order
+    intermediate_results: list[str]  # Each model's output (for debugging/comparison)
+
+
+def cascade_cleanup_transcript(
+    transcript: str,
+    models: list[str],
+    host: str = "http://localhost:11434",
+    timeout: int = 120,
+    instructions_path: Optional[Path] = None,
+    search_dir: Optional[Path] = None,
+    fail_on_missing_instruction: bool = False,
+) -> CascadeCleanupResult:
+    """Run transcript through multiple models sequentially for cascading improvement.
+
+    Each model receives the output of the previous model, allowing for
+    progressive refinement:
+    - Model 1: Initial cleanup/transcription improvement
+    - Model 2: Revision and enhancement
+    - Model 3: Final polish and consistency check
+
+    Args:
+        transcript: Raw transcript text to clean up.
+        models: List of Ollama model names to use in sequence (1-3 models).
+        host: Ollama server URL.
+        timeout: Request timeout per model in seconds.
+        instructions_path: Optional path to custom instructions file.
+        search_dir: Directory to search for fallback instruction files.
+        fail_on_missing_instruction: Raise error if no instruction file found.
+
+    Returns:
+        CascadeCleanupResult with final transcript and processing details.
+
+    Raises:
+        ValueError: If models list is empty.
+        RuntimeError: If any model returns empty output.
+    """
+    if not models:
+        raise ValueError("At least one model must be specified for cascade cleanup")
+
+    instructions, instruction_source = resolve_instruction_file(
+        instructions_path,
+        search_dir=search_dir,
+        fail_on_missing=fail_on_missing_instruction,
+    )
+
+    current_text = transcript
+    intermediate_results: list[str] = []
+
+    for i, model in enumerate(models):
+        # Adjust system prompt for later stages to emphasize revision
+        if i == 0:
+            system_prompt = instructions
+        elif i == 1:
+            system_prompt = f"""You are revising a transcript that has already been cleaned up.
+Review the text and make further improvements:
+- Enhance clarity and flow
+- Fix any remaining errors
+- Improve paragraph structure
+- Ensure consistency in formatting
+
+{instructions}
+
+Return ONLY the revised transcript text."""
+        else:
+            system_prompt = f"""You are doing a final polish on a revised transcript.
+Make final refinements:
+- Ensure professional quality
+- Check for any remaining issues
+- Verify formatting consistency
+- Make the text as clear and readable as possible
+
+{instructions}
+
+Return ONLY the polished transcript text."""
+
+        revised = _call_ollama(current_text, system_prompt, model, host, timeout)
+        if not revised:
+            raise RuntimeError(f"Model '{model}' returned an empty transcript at stage {i + 1}")
+
+        intermediate_results.append(revised)
+        current_text = revised
+
+    return CascadeCleanupResult(
+        revised_transcript=current_text,
+        instruction_source=instruction_source,
+        models=models,
+        intermediate_results=intermediate_results,
     )
 
 

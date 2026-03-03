@@ -83,7 +83,8 @@ class VMEAConfig(BaseModel):
 
     # LLM cleanup
     llm_cleanup_enabled: bool = True
-    ollama_model: str = "llama3.2:3b"
+    ollama_model: str = "llama3.2:3b"  # Single model (backward compat)
+    ollama_models: list[str] = Field(default_factory=list)  # Cascade: [transcribe, revise, polish]
     ollama_host: str = "http://localhost:11434"
     ollama_timeout: int = 120
     cleanup_instructions_path: Optional[Path] = None

@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from vmea.cleanup import CleanupResult, cleanup_transcript, resolve_instruction_file
+from vmea.cleanup import (
+    CleanupResult,
+    _DEFAULT_INSTRUCTIONS_PATH,
+    cleanup_transcript,
+    resolve_instruction_file,
+)
 
 
 class FakeResponse:
@@ -28,7 +33,8 @@ def test_resolve_instruction_file_uses_default_when_path_missing(tmp_path: Path)
     # Use tmp_path as search_dir to avoid picking up project's README.md
     content, source = resolve_instruction_file(None, search_dir=tmp_path)
     assert "You are a transcript editor" in content
-    assert source == "default"
+    # Now returns bundled file path instead of "default"
+    assert source == str(_DEFAULT_INSTRUCTIONS_PATH)
 
 
 def test_resolve_instruction_file_uses_explicit_path(tmp_path: Path) -> None:
@@ -67,7 +73,8 @@ def test_cleanup_transcript_returns_cleanup_result(
     assert isinstance(result, CleanupResult)
     assert result.revised_transcript == "revised transcript"
     assert result.model == "llama3.2:3b"
-    assert result.instruction_source == "default"
+    # Now returns bundled file path instead of "default"
+    assert result.instruction_source == str(_DEFAULT_INSTRUCTIONS_PATH)
 
 
 def test_cleanup_transcript_raises_on_empty_response(monkeypatch: pytest.MonkeyPatch) -> None:
