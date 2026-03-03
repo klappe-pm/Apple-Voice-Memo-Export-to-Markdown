@@ -9,34 +9,9 @@ from vmea.parser import MemoMetadata
 from vmea.writer import (
     format_duration,
     generate_filename,
-    generate_frontmatter,
     generate_note_content,
-    sanitize_filename,
     write_note,
 )
-
-
-class TestSanitizeFilename:
-    """Tests for sanitize_filename function."""
-
-    def test_simple_title(self) -> None:
-        assert sanitize_filename("Meeting Notes") == "meeting-notes"
-
-    def test_special_characters(self) -> None:
-        assert sanitize_filename("Hello! World? @#$%") == "hello-world"
-
-    def test_multiple_spaces(self) -> None:
-        assert sanitize_filename("Too   Many    Spaces") == "too-many-spaces"
-
-    def test_max_length(self) -> None:
-        result = sanitize_filename("A" * 200, max_length=50)
-        assert len(result) <= 50
-
-    def test_empty_after_sanitize(self) -> None:
-        assert sanitize_filename("!@#$%") == "untitled"
-
-    def test_custom_separator(self) -> None:
-        assert sanitize_filename("Hello World", separator="_") == "hello_world"
 
 
 class TestFormatDuration:
@@ -58,101 +33,152 @@ class TestFormatDuration:
 class TestGenerateFilename:
     """Tests for generate_filename function."""
 
-    def test_with_date_and_title(self) -> None:
+    def test_with_transcript(self) -> None:
         metadata = MemoMetadata(
             memo_id="abc123",
-            title="Team Meeting",
             created=datetime(2024, 3, 15, 10, 30),
         )
-        result = generate_filename(metadata)
-        assert result == "2024-03-15-team-meeting.md"
+        result = generate_filename(metadata, has_transcript=True)
+        assert result == "2024-03-15-transcript.md"
 
-    def test_without_date(self) -> None:
-        metadata = MemoMetadata(memo_id="abc123", title="Quick Note")
-        result = generate_filename(metadata)
-        assert result == "quick-note.md"
+    def test_without_transcript(self) -> None:
+        metadata = MemoMetadata(
+            memo_id="abc123",
+            created=datetime(2024, 3, 15, 10, 30),
+        )
+        result = generate_filename(metadata, has_transcript=False)
+        assert result == "2024-03-15-audio.md"
 
-    def test_fallback_to_memo_id(self) -> None:
+    def test_without_date_uses_current(self) -> None:
         metadata = MemoMetadata(memo_id="abc123")
-        result = generate_filename(metadata)
-        assert result == "abc123.md"
-
-
-class TestGenerateFrontmatter:
-    """Tests for generate_frontmatter function."""
-
-    def test_basic_frontmatter(self) -> None:
-        metadata = MemoMetadata(
-            memo_id="test-123",
-            title="Test Recording",
-            created=datetime(2024, 3, 15, 10, 30),
-            duration_seconds=120.5,
-        )
-        result = generate_frontmatter(metadata, "test.m4a")
-
-        assert "---" in result
-        assert 'memo_id: "test-123"' in result
-        assert 'title: "Test Recording"' in result
-        assert "duration_seconds: 120.5" in result
-        assert 'audio_file: "test.m4a"' in result
-
-    def test_frontmatter_with_transcript(self) -> None:
-        metadata = MemoMetadata(
-            memo_id="test-123",
-            transcript="Hello world",
-            transcript_source="plist",
-        )
-        result = generate_frontmatter(metadata, "test.m4a")
-
-        assert "has_transcript: true" in result
-        assert "transcript_source: plist" in result
-        assert "- transcript" in result  # tag
-
-    def test_frontmatter_escapes_quotes(self) -> None:
-        metadata = MemoMetadata(
-            memo_id="test",
-            title='Title with "quotes"',
-        )
-        result = generate_frontmatter(metadata, "test.m4a")
-
-        assert r'title: "Title with \"quotes\""' in result
+        result = generate_filename(metadata, has_transcript=True)
+        # Should use current date, check format
+        assert result.endswith("-transcript.md")
+        assert len(result.split("-")) >= 4  # YYYY-MM-DD-transcript.md
 
 
 class TestGenerateNoteContent:
     """Tests for generate_note_content function."""
 
-    def test_note_content_includes_markdown_body_without_transcript(self) -> None:
+    def test_content_structure_without_transcript(self) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
             title="Test Recording",
-            created=datetime(2024, 3, 15, 10, 30),
-            duration_seconds=120.5,
         )
 
-        result = generate_note_content(metadata, "test.m4a", "[[test.m4a]]")
+        result = generate_note_content(
+            metadata,
+            "Audio/test.m4a",
+            note_title="2024-03-15-audio",
+            date_created="2024-03-15",
+            date_revised="2024-03-15",
+        )
 
-        assert result.startswith("---\n")
-        assert "\n# Test Recording\n" in result
-        assert "\n## Metadata\n" in result
-        assert "[[test.m4a]]" in result
-        assert "## Revised Transcript" not in result
+        # Has YAML frontmatter
+        assert result.startswith("---")
+        assert "domains:" in result
+        assert "sub-domains:" in result
+        assert "llm-model:" in result
+        assert "date-created: 2024-03-15" in result
+        assert "date-revised: 2024-03-15" in result
+        assert "aliases:" in result
+        assert "tags:" in result
+        # Has required sections
+        assert "# 2024-03-15-audio" in result
+        assert "## Voice Memo" in result
+        assert "![[Audio/test.m4a]]" in result
+        assert "## Key Takeaways" in result
+        assert "### Revised Transcript" in result
+        assert "### Original Transcript" in result
+        # Transcript sections are in code blocks
+        assert "```markdown" in result
+        # Default placeholders
+        assert "No LLM Transcript" in result
+        assert "No iOS Transcription Available" in result
 
-    def test_note_content_places_revised_transcript_first_and_original_last(self) -> None:
+    def test_content_with_transcript(self) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
-            title="Test Recording",
-            transcript="raw transcript",
-            revised_transcript="revised transcript",
+            transcript="This is the original transcript.",
         )
 
-        result = generate_note_content(metadata, "test.m4a", "[[test.m4a]]")
+        result = generate_note_content(
+            metadata,
+            "Audio/test.m4a",
+            note_title="2024-03-15-transcript",
+            date_created="2024-03-15",
+            date_revised="2024-03-15",
+        )
 
-        assert "## Revised Transcript" in result
-        assert "revised transcript" in result
-        assert "## Original Transcript" in result
-        assert "raw transcript" in result
-        assert result.index("## Revised Transcript") < result.index("## Metadata")
-        assert result.index("## Original Transcript") > result.index("## Metadata")
+        assert "### Original Transcript" in result
+        assert "This is the original transcript." in result
+        # No revised transcript provided
+        assert "No LLM Transcript" in result
+
+    def test_content_with_revised_transcript(self) -> None:
+        metadata = MemoMetadata(
+            memo_id="test-123",
+            transcript="Original text.",
+            revised_transcript="Cleaned up text.",
+        )
+
+        result = generate_note_content(
+            metadata,
+            "Audio/test.m4a",
+            note_title="2024-03-15-transcript",
+            date_created="2024-03-15",
+            date_revised="2024-03-15",
+        )
+
+        assert "### Revised Transcript" in result
+        assert "Cleaned up text." in result
+        assert "### Original Transcript" in result
+        assert "Original text." in result
+
+    def test_content_with_key_takeaways(self) -> None:
+        metadata = MemoMetadata(memo_id="test-123")
+        takeaways = [
+            "First important point.",
+            "Second important point.",
+            "Third important point.",
+            "Fourth important point.",
+            "Fifth important point.",
+        ]
+
+        result = generate_note_content(
+            metadata,
+            "Audio/test.m4a",
+            note_title="2024-03-15-audio",
+            date_created="2024-03-15",
+            date_revised="2024-03-15",
+            key_takeaways=takeaways,
+        )
+
+        assert "## Key Takeaways" in result
+        assert "1. First important point." in result
+        assert "2. Second important point." in result
+        assert "5. Fifth important point." in result
+
+    def test_content_with_llm_metadata(self) -> None:
+        metadata = MemoMetadata(
+            memo_id="test-123",
+            transcript="Test transcript.",
+        )
+
+        result = generate_note_content(
+            metadata,
+            "Audio/test.m4a",
+            note_title="2024-03-15-transcript",
+            date_created="2024-03-15",
+            date_revised="2024-03-15",
+            llm_model="llama3.2:3b",
+            domains="Technology",
+            sub_domains="Software Development",
+        )
+
+        assert "llm-model: llama3.2:3b" in result
+        assert "domains: Technology" in result
+        assert "sub-domains: Software Development" in result
 
 
 class TestWriteNote:
@@ -163,7 +189,6 @@ class TestWriteNote:
             memo_id="test-123",
             title="Test Recording",
             created=datetime(2024, 3, 15, 10, 30),
-            duration_seconds=120.5,
             transcript="Hello world",
             transcript_source="plist",
         )
@@ -172,102 +197,128 @@ class TestWriteNote:
 
         note_path, audio_path = write_note(metadata, output_dir, audio_source)
 
+        # Markdown created
         assert note_path.exists()
+        assert note_path.name == "2024-03-15-transcript.md"
+
+        # Audio created in Audio/ subfolder
         assert audio_path.exists()
+        assert audio_path.parent.name == "Audio"
         assert audio_path.read_bytes() == b"fake audio"
 
+        # Content is correct format with YAML frontmatter
         content = note_path.read_text(encoding="utf-8")
-        assert "# Test Recording" in content
-        assert "## Revised Transcript" in content
-        assert "## Original Transcript" in content
-        assert "[[2024-03-15-test-recording.m4a]]" in content
+        assert content.startswith("---")
+        assert "date-created: 2024-03-15" in content
+        assert "# 2024-03-15-transcript" in content
+        assert "## Voice Memo" in content
+        assert "![[Audio/2024-03-15-transcript.m4a]]" in content
+        assert "### Original Transcript" in content
+        assert "Hello world" in content
 
-    def test_write_note_cleans_up_when_audio_copy_fails(
-        self,
-        output_dir: Path,
-        temp_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_write_note_audio_only_filename(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
-            title="Test Recording",
+            created=datetime(2024, 3, 15, 10, 30),
+            # No transcript
+        )
+        audio_source = temp_dir / "source.m4a"
+        audio_source.write_bytes(b"fake audio")
+
+        note_path, audio_path = write_note(metadata, output_dir, audio_source)
+
+        # Filename uses "audio" suffix when no transcript
+        assert note_path.name == "2024-03-15-audio.md"
+        assert audio_path.name == "2024-03-15-audio.m4a"
+
+    def test_write_note_handles_collision(self, output_dir: Path, temp_dir: Path) -> None:
+        metadata = MemoMetadata(
+            memo_id="test-123",
+            created=datetime(2024, 3, 15, 10, 30),
+            transcript="Hello",
+        )
+        audio_source = temp_dir / "source.m4a"
+        audio_source.write_bytes(b"fake audio")
+
+        # Create first note
+        note_path1, _ = write_note(metadata, output_dir, audio_source)
+        assert note_path1.name == "2024-03-15-transcript.md"
+
+        # Create second note with same date
+        audio_source2 = temp_dir / "source2.m4a"
+        audio_source2.write_bytes(b"fake audio 2")
+        note_path2, _ = write_note(metadata, output_dir, audio_source2)
+
+        # Should have collision suffix
+        assert note_path2.name == "2024-03-15-transcript-2.md"
+
+    def test_write_note_creates_audio_subfolder(self, output_dir: Path, temp_dir: Path) -> None:
+        metadata = MemoMetadata(
+            memo_id="test-123",
             created=datetime(2024, 3, 15, 10, 30),
         )
         audio_source = temp_dir / "source.m4a"
         audio_source.write_bytes(b"fake audio")
 
-        note_path = output_dir / generate_filename(metadata)
-        audio_path = output_dir / note_path.name.replace(".md", ".m4a")
+        note_path, audio_path = write_note(metadata, output_dir, audio_source)
 
-        def fail_copy(_src: Path, _dst: Path) -> None:
-            raise OSError("copy failed")
+        # Audio subfolder auto-created
+        audio_folder = output_dir / "Audio"
+        assert audio_folder.exists()
+        assert audio_folder.is_dir()
+        assert audio_path.parent == audio_folder
 
-        monkeypatch.setattr("vmea.writer.shutil.copy2", fail_copy)
+    def test_write_note_dry_run(self, output_dir: Path, temp_dir: Path) -> None:
+        metadata = MemoMetadata(
+            memo_id="test-123",
+            created=datetime(2024, 3, 15, 10, 30),
+        )
+        audio_source = temp_dir / "source.m4a"
+        audio_source.write_bytes(b"fake audio")
 
-        with pytest.raises(OSError, match="copy failed"):
-            write_note(metadata, output_dir, audio_source)
+        note_path, audio_path = write_note(metadata, output_dir, audio_source, dry_run=True)
 
+        # Paths returned but files not created
         assert not note_path.exists()
         assert not audio_path.exists()
-        assert not note_path.with_suffix(".md.tmp").exists()
-        assert not audio_path.with_suffix(".m4a.tmp").exists()
 
-    def test_write_note_can_export_audio_to_separate_folder(
-        self,
-        output_dir: Path,
-        temp_dir: Path,
-    ) -> None:
+    def test_write_note_with_key_takeaways(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
-            title="Test Recording",
             created=datetime(2024, 3, 15, 10, 30),
+            transcript="Some transcript",
         )
         audio_source = temp_dir / "source.m4a"
         audio_source.write_bytes(b"fake audio")
-        audio_output_dir = temp_dir / "audio"
+        takeaways = ["Point one.", "Point two.", "Point three.", "Point four.", "Point five."]
 
-        note_path, audio_path = write_note(
-            metadata,
-            output_dir,
-            audio_source,
-            audio_output_folder=audio_output_dir,
+        note_path, _ = write_note(
+            metadata, output_dir, audio_source, key_takeaways=takeaways
         )
 
-        assert note_path.exists()
-        assert audio_path == audio_output_dir / "2024-03-15-test-recording.m4a"
-        assert audio_path.exists()
-
         content = note_path.read_text(encoding="utf-8")
-        assert "[Open Audio](<../audio/2024-03-15-test-recording.m4a>)" in content
+        assert "1. Point one." in content
+        assert "5. Point five." in content
 
-    def test_write_note_falls_back_to_local_source_link_when_copy_fails(
-        self,
-        output_dir: Path,
-        temp_dir: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_write_note_with_llm_metadata(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
-            title="Test Recording",
             created=datetime(2024, 3, 15, 10, 30),
+            transcript="Some transcript",
         )
         audio_source = temp_dir / "source.m4a"
         audio_source.write_bytes(b"fake audio")
 
-        def fail_copy(_src: Path, _dst: Path) -> None:
-            raise OSError("copy failed")
-
-        monkeypatch.setattr("vmea.writer.shutil.copy2", fail_copy)
-
-        note_path, audio_path = write_note(
+        note_path, _ = write_note(
             metadata,
             output_dir,
             audio_source,
-            audio_fallback_to_source_link=True,
+            llm_model="llama3.2:3b",
+            domains="Business",
+            sub_domains="Meeting Notes",
         )
 
-        assert note_path.exists()
-        assert audio_path == audio_source.resolve()
-
         content = note_path.read_text(encoding="utf-8")
-        assert f"[Open Audio](<{audio_source.resolve().as_uri()}>)" in content
+        assert "llm-model: llama3.2:3b" in content
+        assert "domains: Business" in content
+        assert "sub-domains: Meeting Notes" in content

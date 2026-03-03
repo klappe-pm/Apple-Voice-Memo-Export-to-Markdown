@@ -5,12 +5,12 @@
 # Output Settings
 # =============================================================================
 
-# Where to write exported Markdown notes
+# Where to write exported Markdown notes (required on first run)
 # Supports ~ expansion
-output_folder = "~/Documents/Obsidian/Voice Memos"
+output_folder = ""
 
 # Optional separate folder for exported audio files
-# Leave empty to store audio alongside notes
+# Leave empty to use output_folder/audio/
 audio_output_folder = ""
 
 # Audio is always copied into the configured local export folder
@@ -21,23 +21,25 @@ audio_fallback_to_source_link = false
 
 # Subdirectory structure within output_folder
 # Options: "flat", "by-year", "by-month"
-# - flat: all files in root
-# - by-year: YYYY/filename
-# - by-month: YYYY/MM/filename
 output_structure = "flat"
 
 # =============================================================================
 # Metadata & Frontmatter
 # =============================================================================
 
-# Default domain tag for all voice memos
-default_domain = "voice-memo"
+# Default domain for all voice memos (required frontmatter field)
+default_domain = ""
 
-# Additional tags to add to all memos (beyond auto-generated ones)
-additional_tags = []
+# Default subdomain for all voice memos (required frontmatter field)
+default_subdomain = ""
 
-# Date format for filenames
-# Uses Python strftime format
+# Default tags for all memos
+additional_tags = ["voice-memo"]
+
+# Alias mode: "title" uses memo title as alias, "none" for empty aliases
+default_alias_mode = "title"
+
+# Date format for filenames (uses Python strftime)
 filename_date_format = "%Y-%m-%d"
 
 # Slug separator for filenames
@@ -50,8 +52,7 @@ max_filename_length = 100
 # Source Detection
 # =============================================================================
 
-# Override automatic source path detection
-# Leave empty to auto-detect (recommended)
+# Override automatic source path detection (leave empty to auto-detect)
 # Typical paths:
 #   ~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings/
 #   ~/Library/Application Support/com.apple.voicememos/Recordings/
@@ -76,10 +77,10 @@ transcript_source_priority = "both"
 # =============================================================================
 
 # Enable local LLM transcript cleanup via Ollama
+# When disabled, VMEA exports using raw transcript without Ollama dependency
 llm_cleanup_enabled = false
 
 # Ollama model to use for cleanup
-# Recommended: llama3.2:3b (fast), llama3.2:8b (better quality)
 ollama_model = "llama3.2:3b"
 
 # Ollama server host
@@ -88,12 +89,18 @@ ollama_host = "http://localhost:11434"
 # Timeout for Ollama requests (seconds)
 ollama_timeout = 120
 
-# Path to custom cleanup instructions
-# If empty, uses built-in default prompt
+# Explicit path to cleanup instructions file
+# If empty, searches for: CLAUDE.md, GEMINI.md, README.md in output folder
 cleanup_instructions_path = ""
 
-# Keep the original transcript at the bottom of the note when cleanup is applied
-keep_original_transcript = true
+# Fail if no instruction file found (when cleanup enabled)
+fail_on_missing_instruction_file = false
+
+# Keep the original transcript in notes when cleanup is applied
+preserve_raw_transcript = true
+
+# Ollama startup mode: "terminal_managed" or "background"
+ollama_startup_mode = "terminal_managed"
 
 # =============================================================================
 # Reconciliation & State
@@ -101,13 +108,9 @@ keep_original_transcript = true
 
 # How to handle existing notes with same memo_id
 # Options: "skip", "update", "overwrite"
-# - skip: never modify existing notes
-# - update: update only if source changed (recommended)
-# - overwrite: always regenerate
 conflict_resolution = "update"
 
-# State file location (stores export history)
-# Relative to output_folder or absolute path
+# State file location (relative to output_folder or absolute)
 state_file = ".vmea-state.jsonl"
 
 # =============================================================================
@@ -118,18 +121,15 @@ state_file = ".vmea-state.jsonl"
 watch_enabled = true
 
 # Debounce delay for file changes (seconds)
-# Prevents processing partially-synced files
 watch_debounce_seconds = 5
 
 # File stability check iterations
-# File must be unchanged for N checks before processing
 stability_check_count = 3
 
 # Stability check interval (seconds)
 stability_check_interval = 2
 
-# Periodic full reconciliation interval (minutes)
-# Set to 0 to disable
+# Periodic full reconciliation interval (minutes, 0 = disable)
 reconcile_interval_minutes = 60
 
 # =============================================================================
@@ -140,7 +140,6 @@ reconcile_interval_minutes = 60
 log_level = "INFO"
 
 # Log file location (empty = console only)
-# Supports ~ expansion
 log_file = "~/.local/share/vmea/vmea.log"
 
 # Maximum log file size (MB) before rotation

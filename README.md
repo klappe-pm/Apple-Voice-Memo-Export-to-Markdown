@@ -1,33 +1,48 @@
-# VMEA – Voice Memo Export Automation
+# Voice Memo Export Automation (VMEA)
 
-A lightweight, zero-telemetry macOS CLI tool that exports Apple Voice Memos to Obsidian/Logseq-compatible Markdown notes with rich YAML frontmatter.
+VMEA exports Apple Voice Memos into a markdown-based notes folder as:
 
-## Features
+- one markdown file per memo
+- one copied audio file per memo
+- one durable state record per memo
 
-- **Automatic Discovery** – Finds Voice Memos in standard macOS locations (Group Containers + Application Support)
-- **Rich Metadata Extraction** – Parses `.composition/manifest.plist` and embedded `tsrp` atoms for transcripts, duration, recording date
-- **Obsidian/Logseq Ready** – Generates Markdown with YAML frontmatter including tags, aliases, dates, transcript
-- **Reconciliation-as-Source-of-Truth** – Idempotent exports with create/update/skip logic based on content hashes
-- **Local Audio Export** – Copies every `.m4a` into your configured local export folder
-- **Optional LLM Cleanup** – Local Ollama integration for transcript post-processing (no internet required)
-- **Background Daemon** – `launchd` integration with filesystem watching + periodic reconciliation
-- **Zero Telemetry** – Fully offline, no tracking, MIT licensed
+It is designed for local use on macOS and supports optional local transcript cleanup through Ollama.
+
+## Core Behavior
+
+VMEA:
+
+- scans the synced Voice Memos source directory for `.m4a` and `.composition` pairs
+- waits for both files to be stable
+- parses metadata and native transcript data from the plist
+- optionally cleans and formats transcripts using a local Ollama model
+- writes a markdown note with required YAML frontmatter
+- copies the `.m4a` audio into an `audio/` subfolder
+- records durable state so rescans do not create duplicates
+
+## First Run
+
+On first run, VMEA must prompt the user to select an output folder before any export occurs.
+
+Rules:
+
+- this selection is mandatory
+- the selected folder is persisted to `config.toml`
+- markdown files are written into the selected output folder
+- audio files are written into `output_folder/audio/`
+- after first-run setup is complete, VMEA can run unattended
 
 ## Installation
 
 ```bash
-# Clone and install
 git clone https://github.com/klappe-pm/vmea.git
 cd vmea
 pip install -e .
-
-# Or with pipx
-pipx install git+https://github.com/klappe-pm/vmea.git
 ```
 
 ### Requirements
 
-- macOS 14.0+ (Sonoma/Sequoia/Tahoe)
+- macOS 13+ (Ventura or later)
 - Python 3.11+
 - Full Disk Access permission (for Voice Memos folder)
 
@@ -43,6 +58,9 @@ vmea export
 # Check system health
 vmea doctor
 
+# Retry previously failed exports
+vmea retry-failed
+
 # Watch for new memos (foreground)
 vmea watch
 
@@ -50,71 +68,108 @@ vmea watch
 vmea daemon install
 ```
 
-## Example Output
+## Optional Local LLM Cleanup
 
-### Markdown Note (`2024-03-15-meeting-notes.md`)
+Ollama-based transcript cleanup is optional.
 
-```markdown
+If `llm_cleanup_enabled = false`, VMEA:
+
+- does not require Ollama
+- does not load transcript instruction files
+- exports using the raw transcript produced by native extraction
+
+If `llm_cleanup_enabled = true`, VMEA will:
+
+1. check if Ollama is running (start if needed)
+2. verify the configured model is available
+3. preload the model into memory
+4. run transcript cleanup using local instructions
+
+### Ollama Commands
+
+```bash
+# Check Ollama status
+vmea ollama status
+
+# Start Ollama server
+vmea ollama start
+vmea ollama start --terminal  # Opens in Terminal.app
+
+# List available models
+vmea ollama models
+
+# Interactively select and configure a model
+vmea ollama select
+
+# Pull a new model
+vmea ollama pull llama3.2:3b
+```
+
+Transcript cleanup is post-processing only. It may:
+
+- fix punctuation
+- fix obvious transcript artifacts
+- improve paragraphing
+- apply formatting rules
+
+It must not:
+
+- summarize
+- invent content
+- add interpretation
+
+## Transcript Instruction Files
+
+When LLM cleanup is enabled, transcript formatting instructions are resolved in this order:
+
+1. explicit `transcript_instruction_path`
+2. `CLAUDE.md`
+3. `GEMINI.md`
+4. `README.md`
+
+## Required Frontmatter
+
+Every markdown note must include:
+
+- `domain`
+- `subdomain`
+- `date-created`
+- `date-revised`
+- `aliases`
+- `tags`
+
+Date rules:
+
+- format must be `YYYY-MM-DD`
+- on note creation, `date-created` and `date-revised` are identical
+- on note update, `date-created` remains unchanged and `date-revised` updates
+
+## Example Frontmatter
+
+```yaml
 ---
-memo_id: "abc123def456"
-title: "Meeting Notes"
-domain: voice-memo
-created: 2024-03-15T10:30:00-07:00
-modified: 2024-03-15T10:35:22-07:00
-duration_seconds: 322
-has_transcript: true
-transcript_source: native
-audio_file: "2024-03-15-meeting-notes.m4a"
-tags:
-  - voice-memo
-  - transcript
+domain: ""
+subdomain: ""
+date-created: 2026-01-14
+date-revised: 2026-01-14
 aliases:
-  - "Meeting Notes (Voice Memo)"
+  - "My Meeting Notes"
+tags:
+  - "voice-memo"
+memo_id: "vm-123456789"
+source: "voice-memos"
+transcript_source: "native"
+transcript_status: "present"
+transcript_cleanup: ""
+transcript_cleanup_model: ""
+transcript_instruction_source: ""
+audio_relpath: "audio/2026-01-14-my-meeting-notes.m4a"
 ---
-
-# Meeting Notes
-
-## Revised Transcript
-
-[Cleaned transcript content here...]
-
-## Metadata
-
-- **Recorded**: March 15, 2024 at 10:30 AM
-- **Duration**: 5:22
-- **Audio**: [[2024-03-15-meeting-notes.m4a]]
-
-## Original Transcript
-
-[Original raw transcript here...]
 ```
 
 ## Configuration
 
-VMEA uses a TOML config file at `~/.config/vmea/config.toml`:
-
-```toml
-# Output folder for notes
-output_folder = "~/Documents/Obsidian/Voice Memos"
-
-# Optional separate output folder for exported audio
-audio_output_folder = "~/Documents/Obsidian/Voice Memos/Audio"
-
-# Audio is always copied locally during export
-audio_export_mode = "copy"
-
-# Default domain tag
-default_domain = "voice-memo"
-
-# LLM cleanup (optional)
-llm_cleanup_enabled = false
-ollama_model = "llama3.2:3b"
-ollama_host = "http://localhost:11434"
-
-# Background processing
-watch_enabled = true
-reconcile_interval_minutes = 60
-```
+VMEA uses a TOML config file at `~/.config/vmea/config.toml`.
 
 See `config.example.toml` for all options.
 
@@ -132,73 +187,21 @@ See `config.example.toml` for all options.
 | `vmea retry-failed` | Retry previously failed exports |
 | `vmea list` | List discovered memos |
 | `vmea config` | Show current configuration |
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Voice Memos Source                       │
-│  ~/Library/Group Containers/group.com.apple.VoiceMemos...   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Discovery Layer                         │
-│  • Path resolution (Group Containers / App Support)          │
-│  • Pair matching (.m4a + .composition)                       │
-│  • File stability detection                                  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Parsing Layer                           │
-│  • manifest.plist parsing                                    │
-│  • tsrp atom extraction (iOS 18+)                            │
-│  • Metadata normalization                                    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Reconciliation Layer                      │
-│  • State store (JSONL)                                       │
-│  • Content hashing                                           │
-│  • Create / Update / Skip decisions                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                      Output Layer                            │
-│  • Markdown + YAML frontmatter generation                    │
-│  • Audio file copy with metadata                             │
-│  • Optional LLM transcript cleanup                           │
-└─────────────────────────────────────────────────────────────┘
-```
+| `vmea ollama status` | Check Ollama server status |
+| `vmea ollama start` | Start Ollama server |
+| `vmea ollama models` | List available models |
+| `vmea ollama select` | Interactively select a model |
+| `vmea ollama pull <model>` | Pull a model from registry |
 
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev,ollama]
 pytest
-
-# Type checking
-mypy src/vmea
-
-# Linting
-ruff check src/ tests/
-ruff format src/ tests/
 ```
 
 ## License
 
 MIT – see [LICENSE](LICENSE)
-
-## Contributing
-
-Contributions welcome! Please read the architecture docs and ensure tests pass before submitting PRs.
-
----
-
-Built with 🎙️ by voice memo enthusiasts

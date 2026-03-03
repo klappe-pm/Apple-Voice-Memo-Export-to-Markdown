@@ -21,10 +21,14 @@ class MemoMetadata:
     duration_seconds: Optional[float] = None
     transcript: Optional[str] = None
     revised_transcript: Optional[str] = None
-    transcript_source: Optional[str] = None  # "plist", "tsrp", or "llm"
+    transcript_source: Optional[str] = None  # "plist", "tsrp", or "native"
     custom_label: Optional[str] = None
     is_favorited: bool = False
     raw_plist: dict[str, Any] = field(default_factory=dict)
+    # Cleanup provenance fields
+    transcript_cleanup: str = ""  # "" or "cleaned"
+    transcript_cleanup_model: str = ""  # model name or ""
+    transcript_instruction_source: str = ""  # file path or ""
 
 
 def parse_manifest_plist(composition_path: Path) -> Optional[dict[str, Any]]:

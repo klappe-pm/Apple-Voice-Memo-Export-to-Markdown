@@ -65,8 +65,10 @@ class VMEAConfig(BaseModel):
     audio_fallback_to_source_link: bool = False
 
     # Metadata & frontmatter
-    default_domain: str = "voice-memo"
-    additional_tags: list[str] = Field(default_factory=list)
+    default_domain: str = ""
+    default_subdomain: str = ""
+    additional_tags: list[str] = Field(default_factory=lambda: ["voice-memo"])
+    default_alias_mode: str = "title"  # "title" or "none"
     filename_date_format: str = "%Y-%m-%d"
     slug_separator: str = "-"
     max_filename_length: int = 100
@@ -84,7 +86,9 @@ class VMEAConfig(BaseModel):
     ollama_host: str = "http://localhost:11434"
     ollama_timeout: int = 120
     cleanup_instructions_path: Optional[Path] = None
-    keep_original_transcript: bool = True
+    fail_on_missing_instruction_file: bool = False
+    preserve_raw_transcript: bool = True
+    ollama_startup_mode: str = "terminal_managed"  # "terminal_managed" or "background"
 
     # Reconciliation & state
     conflict_resolution: ConflictResolution = ConflictResolution.UPDATE

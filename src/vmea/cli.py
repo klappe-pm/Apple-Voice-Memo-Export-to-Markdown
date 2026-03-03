@@ -13,9 +13,18 @@ from rich.console import Console
 from rich.table import Table
 
 from vmea import __version__
-from vmea.cleanup import cleanup_transcript
+from vmea.cleanup import CleanupResult, cleanup_transcript, generate_domains, generate_key_takeaways
 from vmea.config import VMEAConfig, get_config_path, load_config
 from vmea.discovery import diagnose_paths, discover_memos, find_source_path
+from vmea.ollama import (
+    OllamaStatus,
+    ensure_ready,
+    is_ollama_running,
+    list_models,
+    preload_model,
+    pull_model,
+    start_ollama,
+)
 from vmea.parser import parse_memo
 from vmea.state import StateStore, compute_source_hash, record_export, should_export
 from vmea.writer import format_duration, write_note
@@ -69,7 +78,7 @@ ollama_model = "{ollama_model}"
 ollama_host = "{ollama_host}"
 ollama_timeout = {config.ollama_timeout}
 cleanup_instructions_path = "{cleanup_path}"
-keep_original_transcript = {str(config.keep_original_transcript).lower()}
+preserve_raw_transcript = {str(config.preserve_raw_transcript).lower()}
 
 # Reconciliation
 conflict_resolution = "{config.conflict_resolution}"
@@ -109,24 +118,18 @@ def prompt_path_with_default(prompt_text: str, default_path: Path) -> Path:
     return Path(value).expanduser()
 
 
-def resolve_export_destinations(
-    config: VMEAConfig,
-    *,
-    use_config_paths: bool = False,
-) -> tuple[Path, Path]:
-    """Resolve note/audio destinations, prompting on interactive manual exports."""
-    note_folder = config.output_folder.expanduser()
-    audio_folder = (config.audio_output_folder or config.output_folder).expanduser()
+def prompt_output_folder(default_path: Optional[Path] = None) -> Path:
+    """Always prompt for output folder. Audio/ subfolder is created automatically."""
+    if default_path:
+        default_str = str(default_path.expanduser())
+    else:
+        default_str = str(Path.home() / "Documents" / "Voice Memos")
 
-    if use_config_paths or not sys.stdin.isatty():
-        return note_folder, audio_folder
+    console.print("[bold]Select output folder for markdown files[/bold]")
+    console.print("[dim](Audio/ subfolder will be created automatically)[/dim]")
 
-    console.print("[bold]Export Destinations[/bold]")
-    note_folder = prompt_path_with_default("Markdown output folder", note_folder)
-    audio_folder = prompt_path_with_default("Audio output folder", audio_folder)
-    console.print(f"  notes: {note_folder}")
-    console.print(f"  audio: {audio_folder}")
-    return note_folder, audio_folder
+    folder_str = typer.prompt("Output folder", default=default_str).strip()
+    return Path(folder_str).expanduser()
 
 
 def parse_ollama_model_list(output: str) -> list[str]:
@@ -143,8 +146,8 @@ def parse_ollama_model_list(output: str) -> list[str]:
     return models
 
 
-def list_ollama_models(host: str) -> tuple[list[str], Optional[str]]:
-    """List locally available Ollama models for the configured host."""
+def list_ollama_models_cli(host: str) -> tuple[list[str], Optional[str]]:
+    """List locally available Ollama models via CLI (fallback)."""
     if shutil.which("ollama") is None:
         return [], "Ollama CLI is not installed."
 
@@ -171,7 +174,10 @@ def list_ollama_models(host: str) -> tuple[list[str], Optional[str]]:
 
 def prompt_ollama_model(saved_model: str, host: str) -> str:
     """Prompt for the preferred Ollama model, showing the saved and available options."""
-    models, error_message = list_ollama_models(host)
+    # Try API first, fall back to CLI
+    models, error_message = list_models(host)
+    if error_message:
+        models, error_message = list_ollama_models_cli(host)
 
     if models:
         console.print("[bold]Available Ollama models:[/bold]")
@@ -274,7 +280,7 @@ def init() -> None:
         llm_cleanup_enabled=llm_cleanup_enabled,
         ollama_model=ollama_model,
         ollama_host=ollama_host,
-        keep_original_transcript=True,
+        preserve_raw_transcript=True,
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_content = render_config_content(config)
@@ -310,21 +316,9 @@ def export(
         bool,
         typer.Option("--force", "-f", help="Force re-export even if unchanged"),
     ] = False,
-    use_config_paths: Annotated[
-        bool,
-        typer.Option("--use-config-paths", hidden=True),
-    ] = False,
 ) -> None:
     """Export voice memos to Markdown notes."""
     config = get_config_or_exit()
-    if config.audio_export_mode != "copy":
-        console.print("[red]✗[/red] Audio export mode must be set to [bold]copy[/bold].")
-        console.print("  Re-run [bold]vmea init[/bold] to save audio files locally.")
-        raise typer.Exit(1)
-    if config.audio_fallback_to_source_link:
-        console.print("[red]✗[/red] Source-link fallback is disabled for normal exports.")
-        console.print("  Re-run [bold]vmea init[/bold] to save audio files locally.")
-        raise typer.Exit(1)
 
     # Find source
     source_path = find_source_path(config.source_path_override)
@@ -333,12 +327,11 @@ def export(
         console.print("  Check Full Disk Access in System Settings > Privacy & Security")
         raise typer.Exit(1)
 
-    # Initialize state store
-    output_folder, audio_output_folder = resolve_export_destinations(
-        config,
-        use_config_paths=use_config_paths,
-    )
+    # Always prompt for output folder
+    output_folder = prompt_output_folder(config.output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
+
+    # State tracking
     state_path = output_folder / config.state_file
     state = StateStore(path=state_path)
 
@@ -354,21 +347,39 @@ def export(
         console.print("[yellow]No voice memos found.[/yellow]")
         raise typer.Exit(0)
 
-    console.print(f"[bold blue]VMEA Export[/bold blue] – {len(memos)} memo(s) found\n")
+    console.print(f"\n[bold blue]VMEA Export[/bold blue] – {len(memos)} memo(s) found\n")
 
     if dry_run:
         console.print("[dim](dry run mode – no files will be written)[/dim]\n")
 
+    # Prepare Ollama if LLM cleanup is enabled
+    llm_enabled = config.llm_cleanup_enabled
+    if llm_enabled:
+        console.print("[dim]Preparing Ollama...[/dim]")
+        terminal_mode = config.ollama_startup_mode == "terminal_managed"
+        status = ensure_ready(
+            model=config.ollama_model,
+            host=config.ollama_host,
+            start_if_needed=True,
+            preload=True,
+            terminal_mode=terminal_mode,
+        )
+        if status.error:
+            console.print(f"[red]✗[/red] Ollama error: {status.error}")
+            if not typer.confirm("Continue without LLM cleanup?", default=False):
+                raise typer.Exit(1)
+            llm_enabled = False
+        else:
+            console.print(f"[green]✓[/green] Ollama ready with model: {config.ollama_model}")
+
     # Process each memo
-    stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+    stats = {"created": 0, "skipped": 0, "failed": 0}
     conflict_mode = "overwrite" if force else config.conflict_resolution
 
     for memo_pair in memos:
         try:
             # Compute hash for change detection
             source_hash = compute_source_hash(memo_pair.audio_path, memo_pair.composition_path)
-
-            # Get source file modification time for backup change detection
             source_mtime = datetime.fromtimestamp(memo_pair.audio_path.stat().st_mtime)
 
             # Check if we should export
@@ -388,36 +399,60 @@ def export(
                 memo_pair.memo_id,
                 config.transcript_source_priority,
             )
-            if not config.include_native_transcript:
-                metadata.transcript = None
 
-            if metadata.transcript:
-                metadata.revised_transcript = metadata.transcript
-                if config.llm_cleanup_enabled:
-                    try:
-                        metadata.revised_transcript = cleanup_transcript(
-                            transcript=metadata.transcript,
-                            model=config.ollama_model,
-                            host=config.ollama_host,
-                            timeout=config.ollama_timeout,
-                            instructions_path=config.cleanup_instructions_path,
-                        )
-                    except Exception as exc:
-                        console.print(
-                            f"  [yellow]warn[/yellow] {memo_pair.memo_id}: "
-                            f"Ollama cleanup failed, using original transcript ({exc})"
-                        )
+            # LLM processing: cleanup transcript, generate key takeaways and domains
+            key_takeaways: Optional[list[str]] = None
+            llm_model = ""
+            domains = ""
+            sub_domains = ""
+            if metadata.transcript and llm_enabled:
+                try:
+                    llm_model = config.ollama_model
+
+                    # Clean up transcript
+                    cleanup_result = cleanup_transcript(
+                        transcript=metadata.transcript,
+                        model=config.ollama_model,
+                        host=config.ollama_host,
+                        timeout=config.ollama_timeout,
+                        instructions_path=config.cleanup_instructions_path,
+                        search_dir=output_folder,
+                        fail_on_missing_instruction=config.fail_on_missing_instruction_file,
+                    )
+                    metadata.revised_transcript = cleanup_result.revised_transcript
+
+                    # Generate key takeaways
+                    key_takeaways = generate_key_takeaways(
+                        transcript=metadata.transcript,
+                        model=config.ollama_model,
+                        host=config.ollama_host,
+                        timeout=config.ollama_timeout,
+                    )
+
+                    # Generate domain categorization
+                    domain_result = generate_domains(
+                        transcript=metadata.transcript,
+                        model=config.ollama_model,
+                        host=config.ollama_host,
+                        timeout=config.ollama_timeout,
+                    )
+                    domains = domain_result.domain
+                    sub_domains = domain_result.sub_domain
+                except Exception as exc:
+                    console.print(
+                        f"  [yellow]warn[/yellow] {memo_pair.memo_id}: "
+                        f"LLM processing failed ({exc})"
+                    )
 
             # Write note and copy audio
             note_path, audio_path = write_note(
                 metadata=metadata,
                 output_folder=output_folder,
                 audio_source=memo_pair.audio_path,
-                audio_output_folder=audio_output_folder,
-                audio_export_mode=config.audio_export_mode,
-                audio_fallback_to_source_link=config.audio_fallback_to_source_link,
-                domain=config.default_domain,
-                additional_tags=config.additional_tags,
+                key_takeaways=key_takeaways,
+                llm_model=llm_model,
+                domains=domains,
+                sub_domains=sub_domains,
                 date_format=config.filename_date_format,
                 dry_run=dry_run,
             )
@@ -434,17 +469,15 @@ def export(
                     transcript_source=metadata.transcript_source,
                 )
 
-            action = "create" if reason == "new" else "update"
-            color = "green" if action == "create" else "yellow"
-            console.print(f"  [{color}]{action}[/{color}] {note_path.name}")
-            stats["created" if reason == "new" else "updated"] += 1
+            console.print(f"  [green]create[/green] {note_path.name}")
+            stats["created"] += 1
 
         except Exception as e:
             console.print(f"  [red]fail[/red]  {memo_pair.memo_id}: {e}")
             stats["failed"] += 1
 
     # Summary
-    console.print(f"\n[bold]Done:[/bold] {stats['created']} created, {stats['updated']} updated, {stats['skipped']} skipped, {stats['failed']} failed")
+    console.print(f"\n[bold]Done:[/bold] {stats['created']} created, {stats['skipped']} skipped, {stats['failed']} failed")
 
 
 @app.command()
@@ -707,6 +740,200 @@ def config() -> None:
     if cfg.llm_cleanup_enabled:
         console.print(f"  model: {cfg.ollama_model}")
         console.print(f"  host: {cfg.ollama_host}")
+
+
+# Ollama subcommand group
+ollama_app = typer.Typer(help="Manage Ollama for transcript cleanup")
+app.add_typer(ollama_app, name="ollama")
+
+
+@ollama_app.command("status")
+def ollama_status() -> None:
+    """Check Ollama server status and available models."""
+    config = get_config_or_exit() if get_config_path().exists() else None
+    host = config.ollama_host if config else "http://localhost:11434"
+
+    console.print("[bold blue]Ollama Status[/bold blue]\n")
+
+    if is_ollama_running(host):
+        console.print(f"[green]✓[/green] Server running at {host}")
+        models, err = list_models(host)
+        if err:
+            console.print(f"[yellow]⚠[/yellow] Could not list models: {err}")
+        elif models:
+            console.print(f"\n[bold]Available models:[/bold]")
+            for model in models:
+                marker = " [dim](configured)[/dim]" if config and model == config.ollama_model else ""
+                console.print(f"  - {model}{marker}")
+        else:
+            console.print("[yellow]⚠[/yellow] No models installed")
+            console.print("  Run: ollama pull llama3.2:3b")
+    else:
+        console.print(f"[red]✗[/red] Server not running at {host}")
+        console.print("\n[bold]To start:[/bold]")
+        console.print("  vmea ollama start")
+        console.print("  # or manually: ollama serve")
+
+
+@ollama_app.command("start")
+def ollama_start(
+    terminal: Annotated[
+        bool,
+        typer.Option("--terminal", "-t", help="Open in Terminal.app"),
+    ] = False,
+) -> None:
+    """Start the Ollama server."""
+    config = get_config_or_exit() if get_config_path().exists() else None
+    host = config.ollama_host if config else "http://localhost:11434"
+
+    if is_ollama_running(host):
+        console.print(f"[green]✓[/green] Ollama is already running at {host}")
+        return
+
+    console.print(f"Starting Ollama at {host}...")
+    success, err = start_ollama(host, terminal_mode=terminal)
+
+    if success:
+        console.print(f"[green]✓[/green] Ollama started")
+    else:
+        console.print(f"[red]✗[/red] Failed to start: {err}")
+        raise typer.Exit(1)
+
+
+@ollama_app.command("models")
+def ollama_models_cmd() -> None:
+    """List available Ollama models."""
+    config = get_config_or_exit() if get_config_path().exists() else None
+    host = config.ollama_host if config else "http://localhost:11434"
+
+    if not is_ollama_running(host):
+        console.print(f"[red]✗[/red] Ollama not running at {host}")
+        console.print("  Run: vmea ollama start")
+        raise typer.Exit(1)
+
+    models, err = list_models(host)
+    if err:
+        console.print(f"[red]✗[/red] {err}")
+        raise typer.Exit(1)
+
+    if not models:
+        console.print("[yellow]No models installed.[/yellow]")
+        console.print("\n[bold]Suggested models:[/bold]")
+        console.print("  ollama pull llama3.2:3b   # Fast, good for cleanup")
+        console.print("  ollama pull mistral:7b    # Higher quality")
+        return
+
+    table = Table(title="Available Ollama Models")
+    table.add_column("Model", style="cyan")
+    table.add_column("Status", justify="center")
+
+    configured_model = config.ollama_model if config else None
+    for model in models:
+        status = "[green]configured[/green]" if model == configured_model else ""
+        table.add_row(model, status)
+
+    console.print(table)
+
+
+@ollama_app.command("select")
+def ollama_select() -> None:
+    """Interactively select and configure an Ollama model."""
+    config = get_config_or_exit()
+    host = config.ollama_host
+
+    # Start Ollama if needed
+    if not is_ollama_running(host):
+        console.print("Starting Ollama...")
+        success, err = start_ollama(host)
+        if not success:
+            console.print(f"[red]✗[/red] {err}")
+            raise typer.Exit(1)
+
+    # List and select model
+    models, err = list_models(host)
+    if err:
+        console.print(f"[red]✗[/red] {err}")
+        raise typer.Exit(1)
+
+    if not models:
+        console.print("[yellow]No models installed.[/yellow]")
+        if typer.confirm("Pull the recommended model (llama3.2:3b)?", default=True):
+            console.print("Pulling llama3.2:3b (this may take a few minutes)...")
+            success, err = pull_model("llama3.2:3b", host)
+            if success:
+                console.print("[green]✓[/green] Model pulled successfully")
+                models = ["llama3.2:3b"]
+            else:
+                console.print(f"[red]✗[/red] {err}")
+                raise typer.Exit(1)
+        else:
+            raise typer.Exit(0)
+
+    console.print("\n[bold]Available models:[/bold]")
+    for i, model in enumerate(models, 1):
+        current = " [dim](current)[/dim]" if model == config.ollama_model else ""
+        console.print(f"  {i}. {model}{current}")
+
+    selected = typer.prompt(
+        "\nSelect model (number or name)",
+        default=config.ollama_model,
+    ).strip()
+
+    # Handle numeric selection
+    try:
+        idx = int(selected) - 1
+        if 0 <= idx < len(models):
+            selected = models[idx]
+    except ValueError:
+        pass
+
+    if selected not in models:
+        console.print(f"[red]✗[/red] Model '{selected}' not found")
+        raise typer.Exit(1)
+
+    # Preload the model
+    console.print(f"\nLoading {selected}...")
+    success, err = preload_model(selected, host)
+    if not success:
+        console.print(f"[yellow]⚠[/yellow] Could not preload: {err}")
+
+    # Update config if changed
+    if selected != config.ollama_model:
+        config_path = get_config_path()
+        content = config_path.read_text()
+        # Simple replacement for ollama_model line
+        import re
+        new_content = re.sub(
+            r'^ollama_model\s*=\s*"[^"]*"',
+            f'ollama_model = "{selected}"',
+            content,
+            flags=re.MULTILINE,
+        )
+        config_path.write_text(new_content)
+        console.print(f"[green]✓[/green] Config updated: ollama_model = {selected}")
+    else:
+        console.print(f"[green]✓[/green] Model ready: {selected}")
+
+
+@ollama_app.command("pull")
+def ollama_pull_cmd(
+    model: Annotated[
+        str,
+        typer.Argument(help="Model to pull (e.g., llama3.2:3b)"),
+    ],
+) -> None:
+    """Pull a model from the Ollama registry."""
+    config = get_config_or_exit() if get_config_path().exists() else None
+    host = config.ollama_host if config else "http://localhost:11434"
+
+    console.print(f"Pulling {model}...")
+    success, err = pull_model(model, host)
+
+    if success:
+        console.print(f"[green]✓[/green] Model {model} pulled successfully")
+    else:
+        console.print(f"[red]✗[/red] {err}")
+        raise typer.Exit(1)
 
 
 # Daemon subcommand group
