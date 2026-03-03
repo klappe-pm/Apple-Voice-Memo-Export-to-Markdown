@@ -7,20 +7,18 @@
 Export Apple Voice Memos to markdown notes with AI-powered transcription and organization.
 
 ## Summary
+Automatically exports Apple Voice Memos to well-organized markdown files with transcripts, AI-generated titles, key takeaways, and domain categorization.
 
-**What it does:** Automatically exports Apple Voice Memos to well-organized markdown files with transcripts, AI-generated titles, key takeaways, and domain categorization.
-
-**How it works:**
+### How this project works
 1. **Discovers** Voice Memos from iCloud sync folder
 2. **Extracts** native iOS transcripts (or generates them with Whisper for older memos)
 3. **Enhances** content using local LLM (Ollama) – cleans transcripts, generates titles & summaries
 4. **Writes** markdown notes with YAML frontmatter and consistent naming: `YYYY-MM-DD-XX-title.md`
 5. **Tracks** state to enable incremental updates without duplicates
 
-**Key technologies:** Python 3.11+, OpenAI Whisper (local), Ollama (local LLM), Typer CLI
+
 
 ## Features
-
 - 🎙️ **Automatic Export** – Convert Voice Memos to markdown with YAML frontmatter
 - 🤖 **Whisper Transcription** – Generate transcripts for older memos without native transcription
 - ✨ **LLM Enhancement** – Clean up transcripts, generate titles, key takeaways, and categorization
@@ -32,20 +30,17 @@ Export Apple Voice Memos to markdown notes with AI-powered transcription and org
 - 🔄 **Idempotent** – Re-run safely without creating duplicates
 
 ## Documentation
-
 - 📖 **[Getting Started Guide](docs/GETTING_STARTED.md)** – Complete setup walkthrough
 - ⚙️ **[Customizing LLM Instructions](docs/CUSTOMIZING_LLM_INSTRUCTIONS.md)** – Tailor transcript cleanup
 
 ## Installation
-
 ```bash
 git clone https://github.com/klappe-pm/Apple-Voice-Memo-Export-to-Markdown.git
 cd Apple-Voice-Memo-Export-to-Markdown
 pip install -e .
 ```
 
-### Optional Dependencies
-
+## Optional Dependencies
 ```bash
 # For Whisper transcription (older memos without native transcripts)
 pip install -e ".[transcribe]"
@@ -57,30 +52,24 @@ pip install -e ".[llm]"
 pip install -e ".[dev]"
 ```
 
-### Requirements
-
+## Requirements
 - **macOS 13+** (Ventura or later)
 - **Python 3.11+**
 - **Full Disk Access** permission (System Settings → Privacy & Security)
 - **Ollama** (optional, for LLM features)
 
 ## Quick Start
-
 ```bash
 # 1. Initialize configuration
 vmea init
-
 # 2. Export all memos
 vmea export
-
 # 3. Check system health
 vmea doctor
 ```
 
 ## Output Format
-
 ### Filename Convention
-
 ```
 YYYY-MM-DD-XX-descriptive-title.md
 │    │  │  │   └── LLM-generated title slug
@@ -95,46 +84,7 @@ YYYY-MM-DD-XX-descriptive-title.md
 - `2024-03-15-01-afternoon-standup.md`
 - `2024-03-15-02-client-call-notes.md`
 
-### Note Structure
-
-```yaml
----
-domains: Technology
-sub-domains: Software Development
-llm-model: llama3.2:3b
-date-created: 2024-03-15
-date-revised: 2024-03-15
-aliases:
-tags:
----
-
-# 2024-03-15-00-project-kickoff-meeting
-
-## Voice Memo
-![[Audio/2024-03-15-00-project-kickoff-meeting.m4a]]
-
-## Key Takeaways
-1. First key point from the memo.
-2. Second key point from the memo.
-3. Third key point from the memo.
-4. Fourth key point from the memo.
-5. Fifth key point from the memo.
-
-### Revised Transcript
-```markdown
-Cleaned up transcript text...
-```
-
-### Original Transcript
-```markdown
-Raw transcript from iOS/Whisper...
-```
-```
-
-## Commands Reference
-
-### Core Commands
-
+## Core Commands Reference
 | Command | Description |
 |---------|-------------|
 | `vmea init` | First-run setup with folder picker |
@@ -146,8 +96,7 @@ Raw transcript from iOS/Whisper...
 | `vmea doctor` | System health check |
 | `vmea config` | Show current configuration |
 
-### Watch & Daemon
-
+## Watch & Daemon Command Reference
 | Command | Description |
 |---------|-------------|
 | `vmea watch` | Foreground filesystem watcher |
@@ -156,8 +105,7 @@ Raw transcript from iOS/Whisper...
 | `vmea daemon status` | Check daemon status |
 | `vmea retry-failed` | Retry previously failed exports |
 
-### Ollama (LLM)
-
+### Ollama (LLM) Commnd Reference
 | Command | Description |
 |---------|-------------|
 | `vmea ollama status` | Check Ollama server status |
@@ -167,11 +115,9 @@ Raw transcript from iOS/Whisper...
 | `vmea ollama pull <model>` | Pull a model from registry |
 
 ## Configuration
-
 Config file: `~/.config/vmea/config.toml`
 
-### Key Options
-
+### Configuration Options
 ```toml
 # Output settings
 output_folder = "~/Documents/Voice Memos"
@@ -190,7 +136,6 @@ cleanup_instructions_path = ""             # Custom instructions file (optional)
 ```
 
 ### Cascade Mode
-
 Run multiple models sequentially for progressive refinement:
 
 ```toml
@@ -207,7 +152,6 @@ ollama_models = ["llama3.2:3b", "llama3.1:8b", "mistral:7b"]
 See [Cascade Mode documentation](docs/GETTING_STARTED.md#cascade-mode) for details.
 
 ### Audio Export Modes
-
 | Mode | Behavior |
 |------|----------|
 | `copy` | Copies .m4a to `output_folder/Audio/` |
@@ -215,7 +159,6 @@ See [Cascade Mode documentation](docs/GETTING_STARTED.md#cascade-mode) for detai
 | `app-link` | Creates clickable link to open Voice Memos app |
 
 ### Whisper Models
-
 | Model | Size | Speed | Quality |
 |-------|------|-------|--------|
 | `tiny` | 39 MB | ⚡⚡⚡⚡ | ★★☆☆☆ |
@@ -225,10 +168,10 @@ See [Cascade Mode documentation](docs/GETTING_STARTED.md#cascade-mode) for detai
 | `large` | 1.5 GB | 🐢 | ★★★★★ |
 
 ## Transcription Sources
-
 VMEA extracts transcripts from multiple sources:
 
-**Priority:** `tsrp` → `plist` → `whisper` (fallback)
+### Priority
+`tsrp` → `plist` → `whisper` (fallback)
 
 | Source | Description | Availability |
 |--------|-------------|-------------|
@@ -237,7 +180,6 @@ VMEA extracts transcripts from multiple sources:
 | `whisper` | Generated locally via OpenAI Whisper | Any memo (fallback) |
 
 ## LLM Processing
-
 When `llm_cleanup_enabled = true`, Ollama performs:
 
 1. **Filename Title Generation** – Creates descriptive slug for filename
@@ -259,7 +201,6 @@ When `llm_cleanup_enabled = true`, Ollama performs:
 - ❌ Change the speaker's meaning
 
 ### Customizing LLM Behavior
-
 Edit the instruction file to customize how transcripts are processed:
 
 ```bash
@@ -273,7 +214,6 @@ cleanup_instructions_path = "~/.config/vmea/cleanup_instructions.md"
 See [Customizing LLM Instructions](docs/CUSTOMIZING_LLM_INSTRUCTIONS.md) for details.
 
 ## Development
-
 ```bash
 # Setup
 python -m venv .venv
@@ -294,7 +234,6 @@ ruff check src/vmea
 ```
 
 ## Project Structure
-
 ```
 src/vmea/
 ├── __init__.py       # Package version
@@ -319,29 +258,20 @@ docs/
 ## Troubleshooting
 
 ### "Voice Memos folder not found"
-
 1. Open Voice Memos app to trigger iCloud sync
 2. Grant Full Disk Access in System Settings → Privacy & Security
 3. Run `vmea doctor` to see which paths are checked
 
 ### "Whisper not installed"
-
 ```bash
 pip install -e ".[transcribe]"
 ```
 
 ### "Ollama not running"
-
 ```bash
 vmea ollama start
 # or manually: ollama serve
 ```
-
-## License
-
-MIT – see [LICENSE](LICENSE)
-
----
 
 ## Architecture Diagrams
 All diagrams have been moved into dedicated files under `docs/diagrams/`.
