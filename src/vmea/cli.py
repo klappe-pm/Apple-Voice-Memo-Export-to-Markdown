@@ -172,26 +172,57 @@ def list_ollama_models_cli(host: str) -> tuple[list[str], Optional[str]]:
     return parse_ollama_model_list(result.stdout), None
 
 
-def prompt_ollama_model(saved_model: str, host: str) -> str:
-    """Prompt for the preferred Ollama model, showing the saved and available options."""
+def prompt_ollama_model(saved_model: str, host: str, allow_skip: bool = False) -> Optional[str]:
+    """Show a numbered list of local Ollama models and let the user pick one.
+
+    Args:
+        saved_model: Previously configured model name (highlighted in list).
+        host: Ollama server URL.
+        allow_skip: If True, show a "Skip LLM" option (returns None).
+
+    Returns:
+        Selected model name, or None if the user chose to skip.
+    """
     # Try API first, fall back to CLI
     models, error_message = list_models(host)
     if error_message:
         models, error_message = list_ollama_models_cli(host)
 
-    if models:
-        console.print("[bold]Available Ollama models:[/bold]")
-        for model in models:
-            label = " [dim](saved preference)[/dim]" if model == saved_model else ""
-            console.print(f"  - {model}{label}")
-        if saved_model not in models:
-            console.print(
-                f"[yellow]Saved preferred model not currently listed:[/yellow] {saved_model}"
-            )
-    elif error_message:
-        console.print(f"[yellow]Could not list Ollama models:[/yellow] {error_message}")
+    if not models:
+        if error_message:
+            console.print(f"[yellow]Could not list Ollama models:[/yellow] {error_message}")
+        else:
+            console.print("[yellow]No Ollama models installed.[/yellow]")
+        if allow_skip:
+            return None
+        return typer.prompt("Enter Ollama model name", default=saved_model).strip()
 
-    return typer.prompt("Preferred Ollama model", default=saved_model).strip()
+    console.print("\n[bold]Available Ollama models:[/bold]")
+    if allow_skip:
+        console.print("  0. [dim]Skip LLM processing[/dim]")
+    for i, model in enumerate(models, 1):
+        marker = " [green](current)[/green]" if model == saved_model else ""
+        console.print(f"  {i}. {model}{marker}")
+
+    # Determine default selection number
+    default_num = "1"
+    if saved_model in models:
+        default_num = str(models.index(saved_model) + 1)
+
+    while True:
+        choice = typer.prompt("\nSelect model", default=default_num).strip()
+        try:
+            idx = int(choice)
+            if allow_skip and idx == 0:
+                return None
+            if 1 <= idx <= len(models):
+                return models[idx - 1]
+            console.print(f"[red]Enter a number between {0 if allow_skip else 1} and {len(models)}[/red]")
+        except ValueError:
+            # Allow typing model name directly
+            if choice in models:
+                return choice
+            console.print("[red]Invalid selection. Enter a number or model name.[/red]")
 
 
 def version_callback(value: bool) -> None:
@@ -352,25 +383,48 @@ def export(
     if dry_run:
         console.print("[dim](dry run mode – no files will be written)[/dim]\n")
 
-    # Prepare Ollama if LLM cleanup is enabled
+    # Prepare Ollama – start server, show model picker, preload
     llm_enabled = config.llm_cleanup_enabled
+    selected_model = config.ollama_model
     if llm_enabled:
-        console.print("[dim]Preparing Ollama...[/dim]")
+        console.print("[dim]Starting Ollama...[/dim]")
         terminal_mode = config.ollama_startup_mode == "terminal_managed"
-        status = ensure_ready(
-            model=config.ollama_model,
-            host=config.ollama_host,
-            start_if_needed=True,
-            preload=True,
-            terminal_mode=terminal_mode,
-        )
-        if status.error:
-            console.print(f"[red]✗[/red] Ollama error: {status.error}")
-            if not typer.confirm("Continue without LLM cleanup?", default=False):
-                raise typer.Exit(1)
-            llm_enabled = False
-        else:
-            console.print(f"[green]✓[/green] Ollama ready with model: {config.ollama_model}")
+
+        # Start Ollama server if not running
+        if not is_ollama_running(config.ollama_host):
+            success, err = start_ollama(
+                host=config.ollama_host,
+                terminal_mode=terminal_mode,
+            )
+            if not success:
+                console.print(f"[red]✗[/red] Could not start Ollama: {err}")
+                if not typer.confirm("Continue without LLM cleanup?", default=False):
+                    raise typer.Exit(1)
+                llm_enabled = False
+
+        if llm_enabled:
+            console.print("[green]✓[/green] Ollama is running")
+
+            # Interactive model selection
+            picked = prompt_ollama_model(
+                saved_model=config.ollama_model,
+                host=config.ollama_host,
+                allow_skip=True,
+            )
+            if picked is None:
+                console.print("[dim]Skipping LLM processing.[/dim]")
+                llm_enabled = False
+            else:
+                selected_model = picked
+                console.print(f"[dim]Preloading {selected_model}...[/dim]")
+                success, err = preload_model(selected_model, config.ollama_host)
+                if not success:
+                    console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
+                    if not typer.confirm("Continue without LLM cleanup?", default=False):
+                        raise typer.Exit(1)
+                    llm_enabled = False
+                else:
+                    console.print(f"[green]✓[/green] Ready with model: {selected_model}")
 
     # Process each memo
     stats = {"created": 0, "skipped": 0, "failed": 0}
