@@ -197,16 +197,17 @@ def save_config(config: VMEAConfig, config_path: Optional[Path] = None) -> None:
         config: Configuration to save.
         config_path: Optional path to config file. Uses default if not provided.
     """
-    import toml
+    import tomli_w
 
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert to dict using mode='json' to properly serialize enums as values
-    data = config.model_dump(mode="json")
-    for key, value in data.items():
+    # exclude_none=True to avoid TOML serialization errors for None values
+    data = config.model_dump(mode="json", exclude_none=True)
+    for key, value in list(data.items()):
         if isinstance(value, Path):
             data[key] = str(value)
 
-    with open(path, "w") as f:
-        toml.dump(data, f)
+    with open(path, "wb") as f:
+        tomli_w.dump(data, f)
