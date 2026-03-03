@@ -461,12 +461,12 @@ def export(
             sub_domains = ""
             if metadata.transcript and llm_enabled:
                 try:
-                    llm_model = config.ollama_model
+                    llm_model = selected_model
 
                     # Clean up transcript
                     cleanup_result = cleanup_transcript(
                         transcript=metadata.transcript,
-                        model=config.ollama_model,
+                        model=selected_model,
                         host=config.ollama_host,
                         timeout=config.ollama_timeout,
                         instructions_path=config.cleanup_instructions_path,
@@ -478,7 +478,7 @@ def export(
                     # Generate key takeaways
                     key_takeaways = generate_key_takeaways(
                         transcript=metadata.transcript,
-                        model=config.ollama_model,
+                        model=selected_model,
                         host=config.ollama_host,
                         timeout=config.ollama_timeout,
                     )
@@ -486,7 +486,7 @@ def export(
                     # Generate domain categorization
                     domain_result = generate_domains(
                         transcript=metadata.transcript,
-                        model=config.ollama_model,
+                        model=selected_model,
                         host=config.ollama_host,
                         timeout=config.ollama_timeout,
                     )

@@ -81,7 +81,7 @@ class VMEAConfig(BaseModel):
     transcript_source_priority: TranscriptSource = TranscriptSource.BOTH
 
     # LLM cleanup
-    llm_cleanup_enabled: bool = False
+    llm_cleanup_enabled: bool = True
     ollama_model: str = "llama3.2:3b"
     ollama_host: str = "http://localhost:11434"
     ollama_timeout: int = 120
