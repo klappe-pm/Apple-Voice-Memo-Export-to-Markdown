@@ -13,7 +13,13 @@ from rich.console import Console
 from rich.table import Table
 
 from vmea import __version__
-from vmea.cleanup import CleanupResult, cleanup_transcript, generate_domains, generate_key_takeaways
+from vmea.cleanup import (
+    CleanupResult,
+    cleanup_transcript,
+    generate_domains,
+    generate_filename_title,
+    generate_key_takeaways,
+)
 from vmea.config import VMEAConfig, get_config_path, load_config
 from vmea.discovery import diagnose_paths, discover_memos, find_source_path
 from vmea.ollama import (
@@ -454,14 +460,50 @@ def export(
                 config.transcript_source_priority,
             )
 
-            # LLM processing: cleanup transcript, generate key takeaways and domains
+            # Whisper transcription if no native transcript and transcribe_missing is enabled
+            if not metadata.transcript and config.transcribe_missing:
+                try:
+                    from vmea.transcribe import transcribe_if_needed
+
+                    console.print(f"  [dim]transcribing[/dim] {memo_pair.memo_id}...")
+                    transcript_text, transcript_source = transcribe_if_needed(
+                        audio_path=memo_pair.audio_path,
+                        existing_transcript=metadata.transcript,
+                        model=config.whisper_model,
+                        language=config.whisper_language,
+                    )
+                    if transcript_text:
+                        metadata.transcript = transcript_text
+                        metadata.transcript_source = transcript_source
+                        console.print(f"  [green]✓[/green] Transcribed with Whisper ({transcript_source})")
+                except ImportError:
+                    console.print(
+                        f"  [yellow]warn[/yellow] {memo_pair.memo_id}: "
+                        "Whisper not installed. Install with: pip install 'vmea[transcribe]'"
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"  [yellow]warn[/yellow] {memo_pair.memo_id}: "
+                        f"Whisper transcription failed ({exc})"
+                    )
+
+            # LLM processing: cleanup transcript, generate key takeaways, domains, and filename title
             key_takeaways: Optional[list[str]] = None
             llm_model = ""
             domains = ""
             sub_domains = ""
+            llm_title = ""
             if metadata.transcript and llm_enabled:
                 try:
                     llm_model = selected_model
+
+                    # Generate filename title first (needed for write_note)
+                    llm_title = generate_filename_title(
+                        transcript=metadata.transcript,
+                        model=selected_model,
+                        host=config.ollama_host,
+                        timeout=config.ollama_timeout,
+                    )
 
                     # Clean up transcript
                     cleanup_result = cleanup_transcript(
@@ -498,7 +540,7 @@ def export(
                         f"LLM processing failed ({exc})"
                     )
 
-            # Write note and copy audio
+            # Write note and optionally copy audio
             note_path, audio_path = write_note(
                 metadata=metadata,
                 output_folder=output_folder,
@@ -509,6 +551,8 @@ def export(
                 sub_domains=sub_domains,
                 date_format=config.filename_date_format,
                 dry_run=dry_run,
+                audio_export_mode=config.audio_export_mode,
+                llm_title=llm_title,
             )
 
             # Record in state

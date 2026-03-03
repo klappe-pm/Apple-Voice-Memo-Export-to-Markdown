@@ -33,28 +33,37 @@ class TestFormatDuration:
 class TestGenerateFilename:
     """Tests for generate_filename function."""
 
-    def test_with_transcript(self) -> None:
+    def test_with_llm_title(self) -> None:
         metadata = MemoMetadata(
             memo_id="abc123",
             created=datetime(2024, 3, 15, 10, 30),
         )
-        result = generate_filename(metadata, has_transcript=True)
-        assert result == "2024-03-15-transcript.md"
+        result = generate_filename(metadata, llm_title="project-kickoff", sequence_number=0)
+        assert result == "2024-03-15-00-project-kickoff.md"
 
-    def test_without_transcript(self) -> None:
+    def test_with_sequence_number(self) -> None:
         metadata = MemoMetadata(
             memo_id="abc123",
             created=datetime(2024, 3, 15, 10, 30),
         )
-        result = generate_filename(metadata, has_transcript=False)
-        assert result == "2024-03-15-audio.md"
+        result = generate_filename(metadata, llm_title="meeting-notes", sequence_number=5)
+        assert result == "2024-03-15-05-meeting-notes.md"
+
+    def test_without_llm_title_uses_default(self) -> None:
+        metadata = MemoMetadata(
+            memo_id="abc123",
+            created=datetime(2024, 3, 15, 10, 30),
+        )
+        result = generate_filename(metadata, llm_title="", sequence_number=0)
+        assert result == "2024-03-15-00-voice-memo.md"
 
     def test_without_date_uses_current(self) -> None:
         metadata = MemoMetadata(memo_id="abc123")
-        result = generate_filename(metadata, has_transcript=True)
-        # Should use current date, check format
-        assert result.endswith("-transcript.md")
-        assert len(result.split("-")) >= 4  # YYYY-MM-DD-transcript.md
+        result = generate_filename(metadata, llm_title="test-memo", sequence_number=0)
+        # Should use current date, check format: YYYY-MM-DD-XX-title.md
+        assert result.endswith("-00-test-memo.md")
+        parts = result.split("-")
+        assert len(parts) >= 5  # YYYY-MM-DD-XX-title.md
 
 
 class TestGenerateNoteContent:
@@ -195,11 +204,13 @@ class TestWriteNote:
         audio_source = temp_dir / "source.m4a"
         audio_source.write_bytes(b"fake audio")
 
-        note_path, audio_path = write_note(metadata, output_dir, audio_source)
+        note_path, audio_path = write_note(
+            metadata, output_dir, audio_source, llm_title="test-recording"
+        )
 
-        # Markdown created
+        # Markdown created with new format: YYYY-MM-DD-XX-title.md
         assert note_path.exists()
-        assert note_path.name == "2024-03-15-transcript.md"
+        assert note_path.name == "2024-03-15-00-test-recording.md"
 
         # Audio created in Audio/ subfolder
         assert audio_path.exists()
@@ -210,13 +221,13 @@ class TestWriteNote:
         content = note_path.read_text(encoding="utf-8")
         assert content.startswith("---")
         assert "date-created: 2024-03-15" in content
-        assert "# 2024-03-15-transcript" in content
+        assert "# 2024-03-15-00-test-recording" in content
         assert "## Voice Memo" in content
-        assert "![[Audio/2024-03-15-transcript.m4a]]" in content
+        assert "![[Audio/2024-03-15-00-test-recording.m4a]]" in content
         assert "### Original Transcript" in content
         assert "Hello world" in content
 
-    def test_write_note_audio_only_filename(self, output_dir: Path, temp_dir: Path) -> None:
+    def test_write_note_default_title(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
             created=datetime(2024, 3, 15, 10, 30),
@@ -227,11 +238,11 @@ class TestWriteNote:
 
         note_path, audio_path = write_note(metadata, output_dir, audio_source)
 
-        # Filename uses "audio" suffix when no transcript
-        assert note_path.name == "2024-03-15-audio.md"
-        assert audio_path.name == "2024-03-15-audio.m4a"
+        # Filename uses "voice-memo" default when no llm_title provided
+        assert note_path.name == "2024-03-15-00-voice-memo.md"
+        assert audio_path.name == "2024-03-15-00-voice-memo.m4a"
 
-    def test_write_note_handles_collision(self, output_dir: Path, temp_dir: Path) -> None:
+    def test_write_note_increments_sequence(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(
             memo_id="test-123",
             created=datetime(2024, 3, 15, 10, 30),
@@ -241,16 +252,20 @@ class TestWriteNote:
         audio_source.write_bytes(b"fake audio")
 
         # Create first note
-        note_path1, _ = write_note(metadata, output_dir, audio_source)
-        assert note_path1.name == "2024-03-15-transcript.md"
+        note_path1, _ = write_note(
+            metadata, output_dir, audio_source, llm_title="meeting-notes"
+        )
+        assert note_path1.name == "2024-03-15-00-meeting-notes.md"
 
-        # Create second note with same date
+        # Create second note with same date - should get next sequence number
         audio_source2 = temp_dir / "source2.m4a"
         audio_source2.write_bytes(b"fake audio 2")
-        note_path2, _ = write_note(metadata, output_dir, audio_source2)
+        note_path2, _ = write_note(
+            metadata, output_dir, audio_source2, llm_title="afternoon-call"
+        )
 
-        # Should have collision suffix
-        assert note_path2.name == "2024-03-15-transcript-2.md"
+        # Should have incremented sequence number
+        assert note_path2.name == "2024-03-15-01-afternoon-call.md"
 
     def test_write_note_creates_audio_subfolder(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(
@@ -280,7 +295,9 @@ class TestWriteNote:
 
         # Paths returned but files not created
         assert not note_path.exists()
-        assert not audio_path.exists()
+        # audio_path may be None in app-link mode, so check conditionally
+        if audio_path:
+            assert not audio_path.exists()
 
     def test_write_note_with_key_takeaways(self, output_dir: Path, temp_dir: Path) -> None:
         metadata = MemoMetadata(

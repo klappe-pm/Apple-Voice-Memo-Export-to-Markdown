@@ -15,8 +15,8 @@ class MemoState:
     memo_id: str
     source_hash: str  # Hash of source audio + plist
     note_path: str
-    audio_path: str
-    exported_at: str  # ISO format
+    audio_path: Optional[str] = None  # None for app-link mode
+    exported_at: str = ""  # ISO format
     source_modified: Optional[str] = None  # ISO format
     transcript_source: Optional[str] = None
     export_version: int = 1
@@ -159,7 +159,10 @@ def should_export(
 
     # Check if output files still exist on disk - re-export if deleted
     note_exists = Path(existing.note_path).exists() if existing.note_path else False
-    audio_exists = Path(existing.audio_path).exists() if existing.audio_path else False
+    # audio_path can be None for app-link mode (no local audio file)
+    audio_exists = (
+        Path(existing.audio_path).exists() if existing.audio_path else True
+    )
     if not note_exists or not audio_exists:
         return True, "missing_output"
 
@@ -190,7 +193,7 @@ def record_export(
     memo_id: str,
     source_hash: str,
     note_path: Path,
-    audio_path: Path,
+    audio_path: Optional[Path],
     source_modified: Optional[datetime],
     transcript_source: Optional[str],
 ) -> MemoState:
@@ -201,7 +204,7 @@ def record_export(
         memo_id: Memo identifier.
         source_hash: Source content hash.
         note_path: Path to exported note.
-        audio_path: Path to exported audio.
+        audio_path: Path to exported audio (None for app-link mode).
         source_modified: Source modification time.
         transcript_source: Source of transcript ("plist", "tsrp", etc.).
 
@@ -212,7 +215,7 @@ def record_export(
         memo_id=memo_id,
         source_hash=source_hash,
         note_path=str(note_path),
-        audio_path=str(audio_path),
+        audio_path=str(audio_path) if audio_path else None,
         exported_at=datetime.now().isoformat(),
         source_modified=source_modified.isoformat() if source_modified else None,
         transcript_source=transcript_source,

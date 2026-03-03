@@ -43,6 +43,7 @@ class AudioExportMode(str, Enum):
     COPY = "copy"
     SYMLINK = "symlink"
     SOURCE_LINK = "source-link"
+    APP_LINK = "app-link"  # Link to open Voice Memos app
 
 
 class LogLevel(str, Enum):
@@ -89,6 +90,11 @@ class VMEAConfig(BaseModel):
     fail_on_missing_instruction_file: bool = False
     preserve_raw_transcript: bool = True
     ollama_startup_mode: str = "terminal_managed"  # "terminal_managed" or "background"
+
+    # Whisper transcription (for memos without native transcripts)
+    whisper_model: str = "base"  # tiny, base, small, medium, large
+    whisper_language: Optional[str] = None  # Auto-detect if None
+    transcribe_missing: bool = True  # Transcribe memos without transcripts
 
     # Reconciliation & state
     conflict_resolution: ConflictResolution = ConflictResolution.UPDATE
@@ -156,6 +162,7 @@ def migrate_legacy_config(path: Path) -> None:
     content = content.replace('"AudioExportMode.COPY"', '"copy"')
     content = content.replace('"AudioExportMode.SYMLINK"', '"symlink"')
     content = content.replace('"AudioExportMode.SOURCE_LINK"', '"source-link"')
+    content = content.replace('"AudioExportMode.APP_LINK"', '"app-link"')
     content = content.replace('"OutputStructure.FLAT"', '"flat"')
     content = content.replace('"OutputStructure.BY_YEAR"', '"by-year"')
     content = content.replace('"OutputStructure.BY_MONTH"', '"by-month"')

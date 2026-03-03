@@ -266,3 +266,72 @@ def generate_domains(
             sub_domain = line.replace("sub-domain:", "").replace("subdomain:", "").strip().title()
 
     return DomainResult(domain=domain, sub_domain=sub_domain)
+
+
+FILENAME_TITLE_PROMPT = """You are generating a short filename-safe title for a voice memo.
+
+Analyze the transcript and create a concise, descriptive title (2-5 words).
+
+Rules:
+- Use only lowercase letters, numbers, and hyphens
+- No spaces, underscores, or special characters
+- Maximum 40 characters
+- Be descriptive but brief
+- Do not include dates or generic words like "memo" or "recording"
+
+Return ONLY the title, nothing else.
+
+Examples:
+- "project-kickoff-meeting"
+- "weekly-standup-notes"
+- "api-design-discussion"
+- "birthday-party-planning"
+- "code-review-feedback"
+"""
+
+
+def generate_filename_title(
+    transcript: str,
+    model: str,
+    host: str = "http://localhost:11434",
+    timeout: int = 60,
+) -> str:
+    """Generate a filename-safe title from a transcript using LLM.
+
+    Args:
+        transcript: The transcript text to analyze.
+        model: Ollama model name.
+        host: Ollama server URL.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        A slugified title suitable for use in filenames.
+    """
+    import re
+
+    response = _call_ollama(transcript, FILENAME_TITLE_PROMPT, model, host, timeout)
+
+    # Clean up the response
+    title = response.strip().lower()
+
+    # Remove any quotes that the LLM might have added
+    title = title.strip('"\'')
+
+    # Replace any remaining invalid characters with hyphens
+    title = re.sub(r"[^a-z0-9-]", "-", title)
+
+    # Collapse multiple hyphens
+    title = re.sub(r"-+", "-", title)
+
+    # Remove leading/trailing hyphens
+    title = title.strip("-")
+
+    # Truncate to max length
+    if len(title) > 40:
+        title = title[:40].rsplit("-", 1)[0]  # Cut at word boundary
+
+    # Fallback if empty
+    if not title:
+        title = "voice-memo"
+
+    return title
