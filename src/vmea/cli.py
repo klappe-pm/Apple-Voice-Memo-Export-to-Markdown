@@ -842,6 +842,8 @@ def watch() -> None:
                 memo_id = audio_path.stem
                 console.print(f"  [green]export[/green] {memo_id}")
                 # Find the memo pair for this file
+                # source_path is guaranteed non-None here (checked at function start)
+                assert source_path is not None
                 memo_pairs = [
                     m for m in discover_memos(source_path)
                     if m.memo_id == memo_id
@@ -1073,7 +1075,6 @@ def config() -> None:
         console.print("  audio: Links to Voice Memos app (no file copy)")
     else:
         console.print(f"  audio_mode: {cfg.audio_export_mode}")
-    console.print(f"  structure: {cfg.output_structure}")
     console.print("\n[bold]Source:[/bold]")
     if cfg.source_path_override:
         console.print(f"  path: {cfg.source_path_override} (override)")

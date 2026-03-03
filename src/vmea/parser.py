@@ -344,7 +344,7 @@ def parse_memo(
         try:
             stat = audio_path.stat()
             metadata.created = datetime.fromtimestamp(
-                stat.st_birthtime, tz=UTC  # type: ignore[attr-defined]
+                stat.st_birthtime, tz=UTC
             ).replace(tzinfo=None)
         except (OSError, AttributeError):
             pass
