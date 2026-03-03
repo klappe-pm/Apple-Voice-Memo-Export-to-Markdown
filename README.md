@@ -6,96 +6,52 @@
 
 Export Apple Voice Memos to markdown notes with AI-powered transcription and organization.
 
-## Summary
+## How It Works
 
-**What it does:** Automatically exports Apple Voice Memos to well-organized markdown files with transcripts, AI-generated titles, key takeaways, and domain categorization.
+1. **Discovers** Voice Memos from your iCloud sync folder
+2. **Extracts** native iOS transcripts (or generates them with Whisper)
+3. **Enhances** content using a local LLM via Ollama -- cleans transcripts, generates titles and summaries
+4. **Writes** markdown notes with YAML frontmatter: `YYYY-MM-DD-XX-title.md`
+5. **Tracks** state for incremental updates without duplicates
 
-**How it works:**
-1. **Discovers** Voice Memos from iCloud sync folder
-2. **Extracts** native iOS transcripts (or generates them with Whisper for older memos)
-3. **Enhances** content using local LLM (Ollama) – cleans transcripts, generates titles & summaries
-4. **Writes** markdown notes with YAML frontmatter and consistent naming: `YYYY-MM-DD-XX-title.md`
-5. **Tracks** state to enable incremental updates without duplicates
-
-**Key technologies:** Python 3.11+, OpenAI Whisper (local), Ollama (local LLM), Typer CLI
-
-## Features
-
-- 🎙️ **Automatic Export** – Convert Voice Memos to markdown with YAML frontmatter
-- 🤖 **Whisper Transcription** – Generate transcripts for older memos without native transcription
-- ✨ **LLM Enhancement** – Clean up transcripts, generate titles, key takeaways, and categorization
-- 🔄 **Cascade Mode** – Run multiple LLM models sequentially for progressive refinement
-- 📝 **Customizable Instructions** – Edit LLM prompts without modifying code
-- 📁 **Smart Naming** – Auto-generated filenames: `YYYY-MM-DD-XX-descriptive-title.md`
-- 🔗 **Flexible Audio** – Copy files, symlink, or link directly to Voice Memos app
-- 👀 **Watch Mode** – Automatically export new memos as they're recorded
-- 🔄 **Idempotent** – Re-run safely without creating duplicates
-
-## Documentation
-
-- 📖 **[Getting Started Guide](docs/GETTING_STARTED.md)** – Complete setup walkthrough
-- ⚙️ **[Customizing LLM Instructions](docs/CUSTOMIZING_LLM_INSTRUCTIONS.md)** – Tailor transcript cleanup
-
-## Installation
+## Quick Start
 
 ```bash
+# Install
 git clone https://github.com/klappe-pm/Apple-Voice-Memo-Export-to-Markdown.git
 cd Apple-Voice-Memo-Export-to-Markdown
 pip install -e .
-```
 
-### Optional Dependencies
+# Setup
+vmea init
 
-```bash
-# For Whisper transcription (older memos without native transcripts)
-pip install -e ".[transcribe]"
+# Export all memos
+vmea export
 
-# For LLM features (requires Ollama installed separately)
-pip install -e ".[llm]"
-
-# For development
-pip install -e ".[dev]"
+# Check system health
+vmea doctor
 ```
 
 ### Requirements
 
 - **macOS 13+** (Ventura or later)
 - **Python 3.11+**
-- **Full Disk Access** permission (System Settings → Privacy & Security)
+- **Full Disk Access** permission (System Settings > Privacy & Security)
 - **Ollama** (optional, for LLM features)
 
-## Quick Start
+### Optional Extras
 
 ```bash
-# 1. Initialize configuration
-vmea init
-
-# 2. Export all memos
-vmea export
-
-# 3. Check system health
-vmea doctor
+pip install -e ".[transcribe]"   # Whisper transcription
+pip install -e ".[llm]"          # LLM dependencies
+pip install -e ".[dev]"          # Development tools
 ```
 
-## Output Format
-
-### Filename Convention
+## Output Example
 
 ```
-YYYY-MM-DD-XX-descriptive-title.md
-│    │  │  │   └── LLM-generated title slug
-│    │  │  └────── Daily sequence (00, 01, 02...)
-│    │  └───────── Day
-│    └──────────── Month
-└───────────────── Year
+2024-03-15-00-project-kickoff-meeting.md
 ```
-
-**Examples:**
-- `2024-03-15-00-project-kickoff-meeting.md`
-- `2024-03-15-01-afternoon-standup.md`
-- `2024-03-15-02-client-call-notes.md`
-
-### Note Structure
 
 ```yaml
 ---
@@ -116,239 +72,28 @@ tags:
 ## Key Takeaways
 1. First key point from the memo.
 2. Second key point from the memo.
-3. Third key point from the memo.
-4. Fourth key point from the memo.
-5. Fifth key point from the memo.
+...
 
 ### Revised Transcript
-```markdown
 Cleaned up transcript text...
-```
 
 ### Original Transcript
-```markdown
 Raw transcript from iOS/Whisper...
 ```
-```
 
-## Commands Reference
+## Documentation
 
-### Core Commands
-
-| Command | Description |
-|---------|-------------|
-| `vmea init` | First-run setup with folder picker |
-| `vmea export` | Export all memos |
-| `vmea export --memo-id <id>` | Export single memo |
-| `vmea export --dry-run` | Preview without writing files |
-| `vmea export --force` | Re-export even if unchanged |
-| `vmea list` | List discovered memos |
-| `vmea doctor` | System health check |
-| `vmea config` | Show current configuration |
-
-### Watch & Daemon
-
-| Command | Description |
-|---------|-------------|
-| `vmea watch` | Foreground filesystem watcher |
-| `vmea daemon install` | Install launchd background service |
-| `vmea daemon uninstall` | Remove launchd service |
-| `vmea daemon status` | Check daemon status |
-| `vmea retry-failed` | Retry previously failed exports |
-
-### Ollama (LLM)
-
-| Command | Description |
-|---------|-------------|
-| `vmea ollama status` | Check Ollama server status |
-| `vmea ollama start` | Start Ollama server |
-| `vmea ollama models` | List available models |
-| `vmea ollama select` | Interactively select a model |
-| `vmea ollama pull <model>` | Pull a model from registry |
-
-## Configuration
-
-Config file: `~/.config/vmea/config.toml`
-
-### Key Options
-
-```toml
-# Output settings
-output_folder = "~/Documents/Voice Memos"
-audio_export_mode = "copy"  # "copy", "symlink", or "app-link"
-
-# Whisper transcription (for memos without native transcripts)
-transcribe_missing = true
-whisper_model = "base"  # tiny, base, small, medium, large
-
-# LLM cleanup via Ollama
-llm_cleanup_enabled = true
-ollama_model = "llama3.2:3b"              # Single model (default)
-ollama_models = []                         # Cascade mode: ["model1", "model2", "model3"]
-ollama_host = "http://localhost:11434"
-cleanup_instructions_path = ""             # Custom instructions file (optional)
-```
-
-### Cascade Mode
-
-Run multiple models sequentially for progressive refinement:
-
-```toml
-# Example cascade configuration
-ollama_models = ["llama3.2:3b", "llama3.1:8b", "mistral:7b"]
-```
-
-| Stage | Purpose |
-|-------|--------|
-| Model 1 | Initial cleanup – punctuation, filler words |
-| Model 2 | Revision – clarity, flow, structure |
-| Model 3 | Polish – professional quality, consistency |
-
-See [Cascade Mode documentation](docs/GETTING_STARTED.md#cascade-mode) for details.
-
-### Audio Export Modes
-
-| Mode | Behavior |
-|------|----------|
-| `copy` | Copies .m4a to `output_folder/Audio/` |
-| `symlink` | Creates symlink to original file |
-| `app-link` | Creates clickable link to open Voice Memos app |
-
-### Whisper Models
-
-| Model | Size | Speed | Quality |
-|-------|------|-------|--------|
-| `tiny` | 39 MB | ⚡⚡⚡⚡ | ★★☆☆☆ |
-| `base` | 74 MB | ⚡⚡⚡ | ★★★☆☆ |
-| `small` | 244 MB | ⚡⚡ | ★★★★☆ |
-| `medium` | 769 MB | ⚡ | ★★★★★ |
-| `large` | 1.5 GB | 🐢 | ★★★★★ |
-
-## Transcription Sources
-
-VMEA extracts transcripts from multiple sources:
-
-**Priority:** `tsrp` → `plist` → `whisper` (fallback)
-
-| Source | Description | Availability |
-|--------|-------------|-------------|
-| `tsrp` | Embedded in .m4a file | iOS 18+ / macOS 15+ |
-| `plist` | manifest.plist in .composition folder | iOS 17+ |
-| `whisper` | Generated locally via OpenAI Whisper | Any memo (fallback) |
-
-## LLM Processing
-
-When `llm_cleanup_enabled = true`, Ollama performs:
-
-1. **Filename Title Generation** – Creates descriptive slug for filename
-2. **Transcript Cleanup** – Fixes punctuation, paragraphs, artifacts
-3. **Key Takeaways** – Extracts 5 main points
-4. **Domain Categorization** – Assigns domain and sub-domain
-
-### What LLM cleanup does:
-- ✅ Fix punctuation and capitalization
-- ✅ Improve paragraph breaks
-- ✅ Correct obvious transcription errors
-- ✅ Apply consistent formatting
-- ✅ Add Obsidian backlinks to key terms (customizable)
-
-### What LLM cleanup does NOT do:
-- ❌ Summarize or shorten content
-- ❌ Add information not present
-- ❌ Interpret or editorialize
-- ❌ Change the speaker's meaning
-
-### Customizing LLM Behavior
-
-Edit the instruction file to customize how transcripts are processed:
-
-```bash
-# Copy default instructions
-cp src/vmea/prompts/cleanup_instructions.md ~/.config/vmea/
-
-# Edit and set path in config.toml
-cleanup_instructions_path = "~/.config/vmea/cleanup_instructions.md"
-```
-
-See [Customizing LLM Instructions](docs/CUSTOMIZING_LLM_INSTRUCTIONS.md) for details.
-
-## Development
-
-```bash
-# Setup
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev,transcribe,llm]"
-
-# Run tests
-pytest
-
-# Run tests with coverage
-pytest --cov=vmea
-
-# Type checking
-mypy src/vmea
-
-# Linting
-ruff check src/vmea
-```
-
-## Project Structure
-
-```
-src/vmea/
-├── __init__.py       # Package version
-├── __main__.py       # Entry point
-├── cli.py            # Typer CLI commands
-├── config.py         # Pydantic config models
-├── discovery.py      # Find Voice Memos folder
-├── parser.py         # Extract metadata & transcripts
-├── transcribe.py     # Whisper integration
-├── cleanup.py        # Ollama LLM processing (single & cascade)
-├── writer.py         # Generate markdown notes
-├── state.py          # JSONL state tracking
-├── ollama.py         # Ollama server management
-└── prompts/          # LLM instruction templates
-    └── cleanup_instructions.md  # Default cleanup instructions
-
-docs/
-├── GETTING_STARTED.md           # Complete setup guide
-└── CUSTOMIZING_LLM_INSTRUCTIONS.md  # LLM customization guide
-```
-
-## Troubleshooting
-
-### "Voice Memos folder not found"
-
-1. Open Voice Memos app to trigger iCloud sync
-2. Grant Full Disk Access in System Settings → Privacy & Security
-3. Run `vmea doctor` to see which paths are checked
-
-### "Whisper not installed"
-
-```bash
-pip install -e ".[transcribe]"
-```
-
-### "Ollama not running"
-
-```bash
-vmea ollama start
-# or manually: ollama serve
-```
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/GETTING_STARTED.md) | Full setup walkthrough |
+| [Commands Reference](docs/COMMANDS.md) | All CLI commands and flags |
+| [Configuration](docs/CONFIGURATION.md) | Config options, cascade mode, audio modes |
+| [Use Cases & LLM Processing](docs/USE_CASES.md) | Transcription sources, LLM pipeline, workflows |
+| [Customizing LLM Instructions](docs/CUSTOMIZING_LLM_INSTRUCTIONS.md) | Tailor transcript cleanup prompts |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common errors and fixes |
+| [Development](docs/DEVELOPMENT.md) | Contributing, project structure, testing |
+| [Architecture Diagrams](docs/diagrams/README.md) | Mermaid.js system diagrams |
 
 ## License
 
-MIT – see [LICENSE](LICENSE)
-
----
-
-## Architecture Diagrams
-All diagrams have been moved into dedicated files under `docs/diagrams/`.
-
-- [Architecture Diagrams Index](docs/diagrams/README.md)
-- [Export Sequence Diagram](docs/diagrams/export-sequence-diagram.md)
-- [Data Flow Pipeline Diagram](docs/diagrams/data-flow-pipeline-diagram.md)
-- [Export Decision Flowchart](docs/diagrams/export-decision-flowchart.md)
-- [Core Data Model Class Diagram](docs/diagrams/core-data-model-class-diagram.md)
-- [Transcript Source Priority Diagram](docs/diagrams/transcript-source-priority-diagram.md)
+MIT -- see [LICENSE](LICENSE)
