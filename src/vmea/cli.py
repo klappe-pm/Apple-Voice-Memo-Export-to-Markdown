@@ -666,7 +666,15 @@ def export_memo(
 
                 # Clean up transcript (cascade or single model)
                 if use_cascade:
-                    console.print(f"  [dim]cascade cleanup[/dim] {memo_pair.memo_id[:12]}...")
+                    console.print(f"  [bold]Cascade LLM Processing[/bold] ({len(selected_models)} stages)")
+                    
+                    def cascade_progress(stage: int, total: int, model: str, status: str) -> None:
+                        """Display cascade progress."""
+                        if "starting" in status:
+                            console.print(f"    [{stage}/{total}] [dim]{status}[/dim] with [cyan]{model}[/cyan]...")
+                        elif "completed" in status:
+                            console.print(f"    [{stage}/{total}] [green]✓[/green] {status}")
+                    
                     cascade_result = cascade_cleanup_transcript(
                         transcript=metadata.transcript,
                         models=selected_models,
@@ -675,9 +683,10 @@ def export_memo(
                         instructions_path=config.cleanup_instructions_path,
                         search_dir=output_folder,
                         fail_on_missing_instruction=config.fail_on_missing_instruction_file,
+                        progress_callback=cascade_progress,
                     )
                     metadata.revised_transcript = cascade_result.revised_transcript
-                    console.print(f"  [green]✓[/green] Cascade cleanup complete")
+                    console.print(f"  [green]✓[/green] Cascade complete: {' → '.join(selected_models)}")
                 else:
                     console.print(f"  [dim]cleanup[/dim] {memo_pair.memo_id[:12]}...")
                     cleanup_result = cleanup_transcript(

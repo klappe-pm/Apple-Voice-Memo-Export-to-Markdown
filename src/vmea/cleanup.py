@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib import error, request
@@ -167,6 +168,10 @@ class CascadeCleanupResult:
     intermediate_results: list[str]  # Each model's output (for debugging/comparison)
 
 
+# Type alias for progress callback
+ProgressCallback = Callable[[int, int, str, str], None]  # (stage, total, model, status)
+
+
 def cascade_cleanup_transcript(
     transcript: str,
     models: list[str],
@@ -175,6 +180,7 @@ def cascade_cleanup_transcript(
     instructions_path: Path | None = None,
     search_dir: Path | None = None,
     fail_on_missing_instruction: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> CascadeCleanupResult:
     """Run transcript through multiple models sequentially for cascading improvement.
 
@@ -192,6 +198,7 @@ def cascade_cleanup_transcript(
         instructions_path: Optional path to custom instructions file.
         search_dir: Directory to search for fallback instruction files.
         fail_on_missing_instruction: Raise error if no instruction file found.
+        progress_callback: Optional callback(stage, total, model, status) for progress updates.
 
     Returns:
         CascadeCleanupResult with final transcript and processing details.
@@ -211,8 +218,16 @@ def cascade_cleanup_transcript(
 
     current_text = transcript
     intermediate_results: list[str] = []
+    total_stages = len(models)
+    stage_names = ["cleanup", "revise", "polish"]
 
     for i, model in enumerate(models):
+        stage_name = stage_names[i] if i < len(stage_names) else f"stage-{i+1}"
+        
+        # Report progress: starting stage
+        if progress_callback:
+            progress_callback(i + 1, total_stages, model, f"starting {stage_name}")
+        
         # Adjust system prompt for later stages to emphasize revision
         if i == 0:
             system_prompt = instructions
@@ -245,6 +260,10 @@ Return ONLY the polished transcript text."""
 
         intermediate_results.append(revised)
         current_text = revised
+        
+        # Report progress: completed stage
+        if progress_callback:
+            progress_callback(i + 1, total_stages, model, f"completed {stage_name}")
 
     return CascadeCleanupResult(
         revised_transcript=current_text,
