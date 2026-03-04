@@ -76,10 +76,14 @@ source_path_override = "{source_override}"
 include_native_transcript = {str(config.include_native_transcript).lower()}
 transcript_source_priority = "{config.transcript_source_priority.value if hasattr(config.transcript_source_priority, 'value') else config.transcript_source_priority}"
 
-# LLM cleanup
-llm_cleanup_enabled = {str(config.llm_cleanup_enabled).lower()}
-ollama_model = "{ollama_model}"
-ollama_models = {ollama_models_str}  # Cascade: [transcribe, revise, polish]
+# Whisper transcription
+whisper_model = "{config.whisper_model}"
+force_transcribe_all = {str(config.force_transcribe_all).lower()}  # Always transcribe with Whisper
+
+# LLM cleanup (mandatory cascade mode)
+llm_cleanup_enabled = true  # Cascade is mandatory
+ollama_model = "{ollama_model}"  # Primary model (backward compat)
+ollama_models = {ollama_models_str}  # Cascade: [cleanup, revise, polish]
 ollama_host = "{ollama_host}"
 ollama_timeout = {config.ollama_timeout}
 cleanup_instructions_path = "{cleanup_path}"
@@ -383,50 +387,60 @@ def init() -> None:
         ).strip()
         source_override = Path(source_input).expanduser() if source_input else None
 
-    llm_cleanup_enabled = typer.confirm(
-        "Use a local Ollama model to revise transcripts before writing notes?",
-        default=existing_config.llm_cleanup_enabled if existing_config else True,
-    )
-    ollama_model = existing_config.ollama_model if existing_config else "llama3.2:3b"
-    ollama_models: list[str] = existing_config.ollama_models if existing_config else []
+    # LLM cleanup is now mandatory with cascade mode
+    console.print("\n[bold]Cascade LLM Processing (Mandatory)[/bold]")
+    console.print("All memos will be processed through: Whisper → 3 Ollama models")
     ollama_host = existing_config.ollama_host if existing_config else "http://localhost:11434"
-    if llm_cleanup_enabled:
-        ollama_host = typer.prompt("Ollama host", default=ollama_host).strip()
+    ollama_host = typer.prompt("Ollama host URL", default=ollama_host).strip()
 
-        # Ask about cascade mode
-        use_cascade = typer.confirm(
-            "Configure cascade mode (multiple models for progressive refinement)?",
-            default=len(ollama_models) > 1,
-        )
-        if use_cascade:
-            saved_models = ollama_models if ollama_models else [ollama_model]
-            ollama_models = prompt_ollama_models(
-                saved_models=saved_models,
-                host=ollama_host,
-                allow_skip=False,
-                max_models=3,
-            )
-            ollama_model = ollama_models[0] if ollama_models else ollama_model
-        else:
-            picked = prompt_ollama_models(
-                saved_models=[ollama_model],
-                host=ollama_host,
-                allow_skip=False,
-                max_models=1,
-            )
-            ollama_model = picked[0] if picked else ollama_model
-            ollama_models = []  # Clear cascade config
+    # Validate host format immediately
+    if ":" in ollama_host and "://" not in ollama_host:
+        console.print(f"[red]✗[/red] Invalid host URL: '{ollama_host}'")
+        console.print("  This looks like a model name. The host should be a URL like 'http://localhost:11434'")
+        console.print("  You'll select the model(s) in the next step.")
+        ollama_host = typer.prompt("Ollama host URL", default="http://localhost:11434").strip()
 
-    # Create config
+    # Start Ollama and list available models
+    console.print("\n[dim]Checking Ollama server...[/dim]")
+    if not is_ollama_running(ollama_host):
+        console.print("[dim]Starting Ollama...[/dim]")
+        success, err = start_ollama(ollama_host, terminal_mode=True)
+        if not success:
+            console.print(f"[yellow]⚠[/yellow] Could not start Ollama: {err}")
+            console.print("  Make sure Ollama is installed and run 'ollama serve' manually.")
+
+    # Select 3 models for cascade (mandatory)
+    console.print("\n[bold]Select 3 models for cascade processing:[/bold]")
+    console.print("  Stage 1: Initial cleanup/transcription improvement")
+    console.print("  Stage 2: Revision and enhancement")
+    console.print("  Stage 3: Final polish and consistency check")
+
+    saved_models = existing_config.ollama_models if existing_config and existing_config.ollama_models else []
+    ollama_models = prompt_ollama_models(
+        saved_models=saved_models,
+        host=ollama_host,
+        allow_skip=False,
+        max_models=3,
+    )
+
+    # Ensure we have exactly 3 models (repeat last if fewer selected)
+    while len(ollama_models) < 3:
+        ollama_models.append(ollama_models[-1] if ollama_models else "llama3.2:3b")
+    ollama_models = ollama_models[:3]
+
+    console.print(f"\n[green]✓[/green] Cascade: {' → '.join(ollama_models)}")
+
+    # Create config with mandatory cascade
     config = VMEAConfig(
         output_folder=output_folder,
         audio_export_mode="app-link",
         source_path_override=source_override,
-        llm_cleanup_enabled=llm_cleanup_enabled,
-        ollama_model=ollama_model,
+        llm_cleanup_enabled=True,  # Always enabled now
+        ollama_model=ollama_models[0],  # Primary model for backward compat
         ollama_models=ollama_models,
         ollama_host=ollama_host,
         preserve_raw_transcript=True,
+        force_transcribe_all=True,  # Always transcribe with Whisper
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_content = render_config_content(config)
@@ -437,11 +451,7 @@ def init() -> None:
     console.print("[green]✓[/green] Audio: Links to Voice Memos app (no file copy)")
     if source_override:
         console.print(f"[green]✓[/green] Source folder: {source_override}")
-    if llm_cleanup_enabled:
-        if ollama_models and len(ollama_models) > 1:
-            console.print(f"[green]✓[/green] Cascade mode: {' → '.join(ollama_models)}")
-        else:
-            console.print(f"[green]✓[/green] Ollama model: {ollama_model}")
+    console.print(f"[green]✓[/green] Pipeline: Whisper → {' → '.join(ollama_models)}")
     console.print("\n[bold]Next steps:[/bold]")
     console.print("  vmea list     – List discovered voice memos")
     console.print("  vmea export   – Export all memos")
@@ -489,8 +499,9 @@ def export_memo(
             config.transcript_source_priority,
         )
 
-        # Whisper transcription if no native transcript and transcribe_missing is enabled
-        if not metadata.transcript and config.transcribe_missing:
+        # Whisper transcription - always run if force_transcribe_all is enabled
+        should_transcribe = config.force_transcribe_all or (not metadata.transcript and config.transcribe_missing)
+        if should_transcribe:
             try:
                 from vmea.transcribe import transcribe_if_needed
 
@@ -500,11 +511,12 @@ def export_memo(
                     existing_transcript=metadata.transcript,
                     model=config.whisper_model,
                     language=config.whisper_language,
+                    force_transcribe=config.force_transcribe_all,
                 )
                 if transcript_text:
                     metadata.transcript = transcript_text
                     metadata.transcript_source = transcript_source
-                    console.print(f"  [green]✓[/green] Transcribed with Whisper ({transcript_source})")
+                    console.print(f"  [green]✓[/green] Transcribed with Whisper")
             except ImportError:
                 console.print(
                     f"  [yellow]warn[/yellow] {memo_pair.memo_id}: "
@@ -623,18 +635,19 @@ def _prepare_llm(
     config: VMEAConfig,
     interactive: bool = True,
 ) -> tuple[bool, list[str], bool]:
-    """Prepare Ollama for LLM processing.
+    """Prepare Ollama for LLM processing (mandatory cascade mode).
 
     Returns:
         Tuple of (llm_enabled, selected_models, use_cascade).
+        Cascade is always True when LLM is enabled.
     """
-    llm_enabled = config.llm_cleanup_enabled
+    # LLM cleanup is now mandatory - cascade mode always
     saved_models = config.ollama_models if config.ollama_models else [config.ollama_model]
-    selected_models: list[str] = []
-    use_cascade = False
-
-    if not llm_enabled:
-        return llm_enabled, selected_models, use_cascade
+    
+    # Ensure we have 3 models for cascade
+    while len(saved_models) < 3:
+        saved_models.append(saved_models[-1] if saved_models else "llama3.2:3b")
+    saved_models = saved_models[:3]
 
     console.print("[dim]Starting Ollama...[/dim]")
     terminal_mode = config.ollama_startup_mode == "terminal_managed"
@@ -647,65 +660,44 @@ def _prepare_llm(
         )
         if not success:
             console.print(f"[red]✗[/red] Could not start Ollama: {err}")
-            if interactive and not typer.confirm("Continue without LLM cleanup?", default=False):
-                raise typer.Exit(1)
-            return False, [], False
+            console.print("  Cascade LLM processing is mandatory. Please start Ollama and retry.")
+            raise typer.Exit(1)
 
     console.print("[green]✓[/green] Ollama is running")
 
     if not interactive:
         # Non-interactive: use configured models directly
-        selected_models = saved_models
-        use_cascade = len(selected_models) > 1
-        # Preload first model
-        success, err = preload_model(selected_models[0], config.ollama_host)
+        console.print(f"[dim]Preloading {saved_models[0]}...[/dim]")
+        success, err = preload_model(saved_models[0], config.ollama_host)
         if not success:
             console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
-        return llm_enabled, selected_models, use_cascade
+        console.print(f"[green]✓[/green] Cascade mode: {' → '.join(saved_models)}")
+        return True, saved_models, True
 
-    # Interactive: ask if user wants cascade mode
-    if typer.confirm("Use cascade mode (multiple models for progressive refinement)?", default=len(saved_models) > 1):
+    # Interactive: confirm cascade models
+    console.print(f"\n[bold]Current cascade:[/bold] {' → '.join(saved_models)}")
+    if typer.confirm("Use these models?", default=True):
+        selected_models = saved_models
+    else:
+        console.print("\n[bold]Select 3 models for cascade processing:[/bold]")
         picked = prompt_ollama_models(
             saved_models=saved_models,
             host=config.ollama_host,
-            allow_skip=True,
+            allow_skip=False,
             max_models=3,
         )
-        if not picked:
-            console.print("[dim]Skipping LLM processing.[/dim]")
-            return False, [], False
-        selected_models = picked
-        use_cascade = len(selected_models) > 1
-        console.print(f"[dim]Preloading {selected_models[0]}...[/dim]")
-        success, err = preload_model(selected_models[0], config.ollama_host)
-        if not success:
-            console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
-        if use_cascade:
-            console.print(f"[green]✓[/green] Cascade mode: {' → '.join(selected_models)}")
-        else:
-            console.print(f"[green]✓[/green] Ready with model: {selected_models[0]}")
-    else:
-        # Single model selection
-        picked = prompt_ollama_models(
-            saved_models=saved_models[:1],
-            host=config.ollama_host,
-            allow_skip=True,
-            max_models=1,
-        )
-        if not picked:
-            console.print("[dim]Skipping LLM processing.[/dim]")
-            return False, [], False
-        selected_models = picked
-        console.print(f"[dim]Preloading {selected_models[0]}...[/dim]")
-        success, err = preload_model(selected_models[0], config.ollama_host)
-        if not success:
-            console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
-            if not typer.confirm("Continue without LLM cleanup?", default=False):
-                raise typer.Exit(1)
-            return False, [], False
-        console.print(f"[green]✓[/green] Ready with model: {selected_models[0]}")
+        # Ensure exactly 3 models
+        while len(picked) < 3:
+            picked.append(picked[-1] if picked else "llama3.2:3b")
+        selected_models = picked[:3]
 
-    return llm_enabled, selected_models, use_cascade
+    console.print(f"[dim]Preloading {selected_models[0]}...[/dim]")
+    success, err = preload_model(selected_models[0], config.ollama_host)
+    if not success:
+        console.print(f"[yellow]⚠[/yellow] Could not preload model: {err}")
+    console.print(f"[green]✓[/green] Cascade mode: {' → '.join(selected_models)}")
+
+    return True, selected_models, True
 
 
 @app.command()

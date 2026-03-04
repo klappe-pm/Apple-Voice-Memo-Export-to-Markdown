@@ -55,20 +55,22 @@ include_native_transcript = true
 transcript_source_priority = "both"
 
 # =============================================================================
-# LLM Cleanup (Optional)
+# LLM Cleanup (Mandatory Cascade Mode)
 # =============================================================================
 
-# Enable local LLM transcript cleanup via Ollama
-# When disabled, VMEA exports using raw transcript without Ollama dependency
-llm_cleanup_enabled = false
+# LLM cleanup is now mandatory with cascade mode
+# Pipeline: Whisper transcription → 3 Ollama models
+llm_cleanup_enabled = true
 
-# Ollama model to use for cleanup (single model mode)
+# Primary model (backward compatibility)
 ollama_model = "llama3.2:3b"
 
-# Cascade mode: list of models for progressive refinement
+# Cascade models: 3 models for progressive refinement (MANDATORY)
+# Stage 1: Initial cleanup/transcription improvement
+# Stage 2: Revision and enhancement  
+# Stage 3: Final polish and consistency check
 # Example: ["llama3.2:3b", "mistral:7b", "llama3.2:3b"]
-# Leave empty to use single model mode
-ollama_models = []
+ollama_models = ["llama3.2:3b", "llama3.2:3b", "llama3.2:3b"]
 
 # Ollama server host
 ollama_host = "http://localhost:11434"
@@ -90,7 +92,7 @@ preserve_raw_transcript = true
 ollama_startup_mode = "terminal_managed"
 
 # =============================================================================
-# Whisper Transcription
+# Whisper Transcription (Always runs first)
 # =============================================================================
 
 # Whisper model size: tiny, base, small, medium, large
@@ -99,7 +101,11 @@ whisper_model = "base"
 # Language for Whisper (empty = auto-detect)
 whisper_language = ""
 
-# Transcribe memos that have no native transcript
+# MANDATORY: Always transcribe ALL memos with Whisper
+# This ensures consistent quality before cascade processing
+force_transcribe_all = true
+
+# Legacy option (ignored when force_transcribe_all is true)
 transcribe_missing = true
 
 # =============================================================================

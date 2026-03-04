@@ -131,30 +131,34 @@ def transcribe_if_needed(
     existing_transcript: str | None,
     model: str = DEFAULT_MODEL,
     language: str | None = None,
+    force_transcribe: bool = False,
 ) -> tuple[str | None, str]:
-    """Transcribe audio only if no existing transcript is available.
+    """Transcribe audio, optionally forcing re-transcription even if transcript exists.
 
     Args:
         audio_path: Path to the audio file.
         existing_transcript: Existing transcript text, or None.
         model: Whisper model to use if transcription needed.
         language: Optional language code.
+        force_transcribe: If True, always transcribe with Whisper regardless of existing transcript.
 
     Returns:
         Tuple of (transcript_text, source) where source is "whisper" if
         transcription was performed, or "existing" if transcript was already present.
         Returns (None, "none") if transcription fails or no transcript available.
     """
-    # If transcript already exists, return it
-    if existing_transcript and existing_transcript.strip():
+    # If transcript already exists and we're not forcing re-transcription, return it
+    if not force_transcribe and existing_transcript and existing_transcript.strip():
         return existing_transcript, "existing"
 
     # Check if Whisper is available
     if not is_whisper_available():
         logger.warning(
-            "No transcript available and Whisper is not installed. "
-            "Install with: pip install 'vmea[transcribe]'"
+            "Whisper is not installed. Install with: pip install 'vmea[transcribe]'"
         )
+        # Fall back to existing transcript if available
+        if existing_transcript and existing_transcript.strip():
+            return existing_transcript, "existing"
         return None, "none"
 
     # Transcribe with Whisper
@@ -163,4 +167,8 @@ def transcribe_if_needed(
         return result.text, "whisper"
     except Exception as e:
         logger.error(f"Whisper transcription failed: {e}")
+        # Fall back to existing transcript if available
+        if existing_transcript and existing_transcript.strip():
+            logger.info("Falling back to existing transcript")
+            return existing_transcript, "existing"
         return None, "none"

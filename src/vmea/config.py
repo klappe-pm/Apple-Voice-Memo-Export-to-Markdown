@@ -58,15 +58,35 @@ class VMEAConfig(BaseModel):
     ollama_models: list[str] = Field(default_factory=list)  # Cascade: [transcribe, revise, polish]
     ollama_host: str = "http://localhost:11434"
     ollama_timeout: int = 120
+
+    @field_validator("ollama_host", mode="before")
+    @classmethod
+    def validate_ollama_host(cls, v: str) -> str:
+        """Validate that ollama_host is a URL, not a model name."""
+        if not v:
+            return "http://localhost:11434"
+        # Check if user accidentally entered a model name (contains : but not ://)
+        if ":" in v and "://" not in v:
+            raise ValueError(
+                f"Invalid ollama_host '{v}'. This looks like a model name, not a host URL. "
+                f"Use ollama_host='http://localhost:11434' and set the model in ollama_models instead."
+            )
+        # Ensure it starts with http:// or https://
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(
+                f"Invalid ollama_host '{v}'. Must be a URL starting with http:// or https://"
+            )
+        return v
     cleanup_instructions_path: Path | None = None
     fail_on_missing_instruction_file: bool = False
     preserve_raw_transcript: bool = True
     ollama_startup_mode: str = "terminal_managed"  # "terminal_managed" or "background"
 
-    # Whisper transcription (for memos without native transcripts)
+    # Whisper transcription
     whisper_model: str = "base"  # tiny, base, small, medium, large
     whisper_language: str | None = None  # Auto-detect if None
-    transcribe_missing: bool = True  # Transcribe memos without transcripts
+    transcribe_missing: bool = True  # Transcribe memos without transcripts (legacy)
+    force_transcribe_all: bool = True  # Always transcribe with Whisper, even if native transcript exists
 
     # Reconciliation & state
     conflict_resolution: ConflictResolution = ConflictResolution.UPDATE
