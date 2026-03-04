@@ -585,13 +585,22 @@ def export_memo(
         domains = ""
         sub_domains = ""
         llm_title = ""
-        if metadata.transcript and llm_enabled and selected_models:
+        
+        # Check if we have a transcript for LLM processing
+        if not metadata.transcript:
+            console.print(f"  [yellow]warn[/yellow] {memo_pair.memo_id}: No transcript available for LLM processing")
+        elif not llm_enabled:
+            console.print(f"  [dim]skip llm[/dim] {memo_pair.memo_id}: LLM disabled")
+        elif not selected_models:
+            console.print(f"  [yellow]warn[/yellow] {memo_pair.memo_id}: No models selected for LLM processing")
+        else:
             try:
                 # Use first model for auxiliary tasks, cascade for main cleanup
                 primary_model = selected_models[0]
                 llm_model = " \u2192 ".join(selected_models) if use_cascade else primary_model
 
                 # Generate filename title first (needed for write_note)
+                console.print(f"  [dim]generating title[/dim] {memo_pair.memo_id[:12]}...")
                 llm_title = generate_filename_title(
                     transcript=metadata.transcript,
                     model=primary_model,
@@ -612,7 +621,9 @@ def export_memo(
                         fail_on_missing_instruction=config.fail_on_missing_instruction_file,
                     )
                     metadata.revised_transcript = cascade_result.revised_transcript
+                    console.print(f"  [green]✓[/green] Cascade cleanup complete")
                 else:
+                    console.print(f"  [dim]cleanup[/dim] {memo_pair.memo_id[:12]}...")
                     cleanup_result = cleanup_transcript(
                         transcript=metadata.transcript,
                         model=primary_model,
@@ -625,14 +636,17 @@ def export_memo(
                     metadata.revised_transcript = cleanup_result.revised_transcript
 
                 # Generate key takeaways (using primary model)
+                console.print(f"  [dim]generating takeaways[/dim] {memo_pair.memo_id[:12]}...")
                 key_takeaways = generate_key_takeaways(
                     transcript=metadata.transcript,
                     model=primary_model,
                     host=config.ollama_host,
                     timeout=config.ollama_timeout,
                 )
+                console.print(f"  [green]✓[/green] Generated {len(key_takeaways)} key takeaways")
 
                 # Generate domain categorization (using primary model)
+                console.print(f"  [dim]categorizing[/dim] {memo_pair.memo_id[:12]}...")
                 domain_result = generate_domains(
                     transcript=metadata.transcript,
                     model=primary_model,
@@ -641,11 +655,14 @@ def export_memo(
                 )
                 domains = domain_result.domain
                 sub_domains = domain_result.sub_domain
+                console.print(f"  [green]✓[/green] Categorized: {domains} / {sub_domains}")
             except Exception as exc:
                 console.print(
-                    f"  [yellow]warn[/yellow] {memo_pair.memo_id}: "
-                    f"LLM processing failed ({exc})"
+                    f"  [red]error[/red] {memo_pair.memo_id}: "
+                    f"LLM processing failed: {exc}"
                 )
+                import traceback
+                console.print(f"  [dim]{traceback.format_exc()[:200]}[/dim]")
 
         # Write note and optionally copy audio
         note_path, audio_path = write_note(
